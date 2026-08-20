@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  api_service:
+    build: .
+    ports:
+      - "39527:39527"
+    environment:
+      CUSTOM_TOKEN: sk-your-own-custom-token
+      SYSTEM_TOKEN: your-poe-api-key
+      MODEL_MAPPING: '{
+        "gpt-3.5-turbo": "GPT-3.5-Turbo",
+        "gpt-4o": "GPT-4o",
+        "gpt-4-turbo": "GPT-4-Turbo"
+      }'
+      PROXY_TYPE: socks
+      PROXY_HOST:
+      PROXY_PORT:
+      PROXY_USERNAME:
+      PROXY_PASSWORD:

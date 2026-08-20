@@ -1,0 +1,39 @@
+# 虚拟环境
+venv/
+.venv/
+.conda/
+
+# 敏感配置文件与密钥文件
+.env
+.env.*
+!.env.example
+poe_token.txt
+*.token
+*.key
+
+# 缓存与编译文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 日志与运行时状态
+log/
+run/
+*.log
+
+# 系统与编辑器文件
+.DS_Store
+*/.DS_Store
+.vscode/
+.idea/
+.history/
+.claude/
+.zcode/
+CLAUDE.md
+
+# 测试生成数据
+test_data/
+
+# 其他
+fastapi_poe/

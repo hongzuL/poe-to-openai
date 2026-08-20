@@ -1,0 +1,13 @@
+# 运行依赖（已删除原清单中未被使用的 langchain/redis/SQLAlchemy/fp 等包）
+fastapi>=0.115.0
+fastapi_poe==0.0.70
+httpx>=0.27.2,<0.29
+httpx-sse>=0.4.0
+uvicorn>=0.30.0
+gunicorn>=23.0.0
+python-dotenv>=1.0.1
+tiktoken>=0.8.0
+socksio>=1.0.0
+
+# 仅测试脚本（test_*.py）使用
+requests>=2.32.0

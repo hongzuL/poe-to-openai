@@ -1,0 +1,234 @@
+poe的api不是所有模型都支持tool use，但是我想用zcode或者deepseek harness这种工具来调用，应该怎么用？
+*Thinking...*
+
+> **Exploring Code Harness Interactions**
+> 
+> I'm currently analyzing how to best integrate with coding harness tools, focusing on the nuances of API interactions with systems like `zcode` and the `deepseek harness`. My efforts are centered on understanding the data flow and potential integration points.
+> 
+> **Adapting Tool Integration Approaches**
+> 
+> I'm now investigating prompt-based strategies to enable tool usage with models that lack native `tool_calls` support, specifically exploring ReAct and XML/Markdown parsing methods to simulate structured function calling.
+> 
+> **Refining Tool Call Formats**
+> 
+> I'm currently exploring how to best structure tool call output from LLMs that don't natively support function calling. My focus is on defining clear formats, like XML or JSON markdown blocks, that can be reliably parsed by a client harness for execution and feedback.
+> 
+> **Developing Proxy for Tool Calls**
+> 
+> I'm now devising a proxy solution to bridge the gap for Poe models lacking native tool call support. This proxy will intercept requests, inject tool definitions into system prompts, and parse textual responses to reconstruct tool calls for harnesses that expect structured output.
+> 
+> **Translating Tool Call Syntax**
+> 
+> I'm now examining the problem where harnesses expecting native `tool_calls` reject responses from models without this feature. My current focus is on developing a proxy middleware to transparently convert these tool calls into a system prompt format that Poe-based models can understand and process.
+> 
+
+
+在使用 Poe API 配合需要工具调用（Tool Use / Function Calling）的评测基准或代码代理（如 DeepSeek Harness、zcode、Aider、SWE-bench 等）时，常会遇到 **Poe 不支持 OpenAI 原生的 `tools` / `tool_calls` 参数** 的问题。
+
+要解决这个问题，核心思路是将 **Native Function Calling（原生工具调用）** 转换为 **Prompt-based Tool Calling（基于 Prompt 的文本工具调用）**。以下是几种常见且实用的解决方案：
+
+---
+
+### 方案一：搭建本地转接代理（Proxy Middleware）——最推荐
+
+如果你的 Harness 或工具（如 zcode）**强依赖 OpenAI 标准格式的 `tools` 参数**，最优雅的方式是在 Harness 和 Poe API 之间加一个本地小代理（Proxy）。
+
+#### 代理的工作流程：
+1. **拦截请求**：接收 Harness 发来的带 `tools` 的标准 OpenAI 请求。
+2. **转换 Prompt**：将 `tools` 的 Schema 和参数说明追加到 `system_prompt` 中，并要求模型以指定格式（如 JSON 或 XML）输出工具调用指令。
+3. **调用 Poe**：将转换后的普通文本请求发送给 Poe API（去掉 `tools` 字段）。
+4. **解析与还原**：接收 Poe 返回的纯文本，用正则解析出工具调用内容，将其伪装成标准 OpenAI 格式的 `tool_calls` 返回给 Harness。
+
+#### 极简 Python Proxy 核心逻辑示例（基于 FastAPI）：
+
+```python
+import json
+import re
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import httpx
+
+app = FastAPI()
+
+POE_API_KEY = "your-poe-api-key"
+POE_BASE_URL = "https://api.poe.com/v1"  # 或你的 Poe 接入网关
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    data = await request.json()
+    tools = data.pop("tools", None)  # 移除原生的 tools，避免 Poe 报错
+    model = data.get("model", "DeepSeek-V3")
+    messages = data.get("messages", [])
+
+    # 1. 如果有 tools，将其注入到 System Prompt
+    if tools:
+        tool_prompt = (
+            "\n\nYou have access to the following tools:\n"
+            f"{json.dumps(tools, indent=2, ensure_ascii=False)}\n\n"
+            "If you need to call a tool, you MUST reply ONLY in the following JSON format:\n"
+            '```json\n{"tool_calls": [{"name": "tool_name", "arguments": {"arg1": "val1"}}]}\n```\n'
+            "If no tool is needed, reply directly with plain text."
+        )
+        if messages and messages[0]["role"] == "system":
+            messages[0]["content"] += tool_prompt
+        else:
+            messages.insert(0, {"role": "system", "content": tool_prompt})
+
+    data["messages"] = messages
+
+    # 2. 转发给 Poe API
+    headers = {"Authorization": f"Bearer {POE_API_KEY}"}
+    async with httpx.AsyncClient(timeout=120) as client:
+        poe_resp = await client.post(
+            f"{POE_BASE_URL}/chat/completions", json=data, headers=headers
+        )
+        poe_data = poe_resp.json()
+
+    # 3. 解析文本中的 Tool Call 并包装回 OpenAI 响应结构
+    content = poe_data["choices"][0]["message"]["content"]
+
+    # 处理 DeepSeek-R1 的 <think> 标签（避免干扰解析）
+    clean_content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+
+    match = re.search(
+        r"```json\s*(\{.*?\})\s*```", clean_content, re.DOTALL
+    ) or re.search(r"(\{.*?\})", clean_content, re.DOTALL)
+    if match:
+        try:
+            parsed = json.loads(match.group(1))
+            if "tool_calls" in parsed:
+                formatted_tool_calls = []
+                for idx, call in enumerate(parsed["tool_calls"]):
+                    formatted_tool_calls.append(
+                        {
+                            "id": f"call_{idx}",
+                            "type": "function",
+                            "function": {
+                                "name": call["name"],
+                                "arguments": json.dumps(
+                                    call.get("arguments", {})
+                                ),
+                            },
+                        }
+                    )
+                # 组装 OpenAI 标准格式
+                poe_data["choices"][0]["message"]["tool_calls"] = (
+                    formatted_tool_calls
+                )
+                poe_data["choices"][0]["message"]["content"] = (
+                    None  # 标准 tool_call 时 content 通常为 null
+                )
+        except Exception:
+            pass  # 如果不是标准的 tool json，保持原文本返回
+
+    return JSONResponse(content=poe_data)
+```
+
+**使用方法**：
+- 启动代理：`uvicorn proxy:app --port 8000`
+- 在你的 Harness / zcode 配置文件中，将 `OPENAI_API_BASE` 指向 `http://127.0.0.1:8000/v1`。
+
+---
+
+### 方案二：配置 Harness 端切换为 ReAct / XML 格式
+
+如果你使用的 Harness 支持调整 Prompt 策略（很多代码 Agent 都内置了非原生工具调用模式）：
+
+1. **切换为 ReAct 模式（Thought / Action / Observation）**：
+   - 将 Agent 模式从 `openai-tools` 改为 `react` 或 `xml-format`。
+   - 比如在类似 LangChain、SWE-bench 等框架中，可选用 `XMLAgent` 或 `ReActAgent`。
+2. **使用 Anthropic-style XML 标签**：
+   - 很多模型（包括 DeepSeek）在处理 XML 标签时表现优于纯 JSON。
+   - 例如提示词要求：`<function=run_code><param name="code">print(1)</param></function>`，Harness 正则匹配 XML 执行工具并喂回 `<observation>...</observation>`。
+
+---
+
+### 方案三：针对 DeepSeek-R1 / V3 的特别优化
+
+在通过 Poe 调用 DeepSeek 模型运行 Harness 时，有两点需要特别注意：
+
+1. **处理 `<think>` 思考标签**：
+   - DeepSeek-R1 会输出思维链 `<think>...</think>`。如果你的 Harness 使用严格的正则解析工具调用，可能会因为思维链中的代码片段误触发工具，务必在解析工具调用前**先过滤掉 `<think>` 块**。
+2. **关闭流式传输（Streaming）**：
+   - 如果走中间件 Proxy，建议将 Harness 的请求设置为 `stream=False`（非流式），这样 Proxy 可以完整捕获整个 JSON 响应并进行结构化反序列化，避免拼接 chunk 时状态丢失。
+3. **温度设置（Temperature）**：
+   - 在跑 Harness 评测或精准代码执行时，建议在请求参数中将 `temperature` 设为 `0` 或 `0.2`，以保证工具调用的输出格式稳定。
+
+
+
+
+方案一：搭建本地转接代理（Proxy Middleware）——最推荐
+这个确实不错，github上现在有没有已有的实现？
+
+*Thinking...*
+
+> **Refining Local Proxy Logic**
+> 
+> I'm currently honing the local proxy middleware, focusing on the precise conversion of OpenAI's tool-calling format into a prompt-based structure. My aim is to ensure seamless parsing of responses from various providers, making the integration process more robust and efficient for our current phase.
+> 
+> **Searching For Solutions**
+> 
+> I'm now actively searching GitHub for open-source projects that translate tool calls into prompt-based formats, specifically for models like Poe that lack native function calling support. My investigation into existing proxies such as LiteLLM and various Poe-to-OpenAI wrappers is underway.
+> 
+> **Searching for Projects**
+> 
+> I'm currently investigating GitHub for open-source implementations of the proxy mechanism, specifically focusing on how they bridge Poe or other upstream endpoints to the OpenAI Tool Calling standard. My goal is to identify existing projects that demonstrate this functionality.
+> 
+
+
+在 GitHub 上已经有几个成熟的开源项目实现了这种“代理转发 + 工具调用模拟/转换（Tool Emulation / Function Calling Proxy）”机制，按针对性分类推荐如下：
+
+---
+
+### 一、 专门针对 Poe 的 OpenAI 格式转接代理
+
+如果你使用的是 Poe 的 API 或账号，以下两个项目针对 Poe 做了直接的协议与 Tool Call 转换：
+
+#### 1. **`qingyanbaby/poe-to-openai`**（针对 Poe 官方 API，最契合）
+* **GitHub 地址**：[qingyanbaby/poe-to-openai](https://github.com/qingyanbaby/poe-to-openai)
+* **特点**：
+  * 将 Poe 官方 API 转换为标准的 OpenAI `/v1/chat/completions`。
+  * 内置了 **OpenAI Function Calling（tools / tool_calls）** 支持与转换。
+  * 支持映射 DeepSeek、Claude 等模型，支持 Reasoning Mode（思考模型输出过滤）。
+* **使用方式**：
+  ```bash
+  git clone https://github.com/qingyanbaby/poe-to-openai.git
+  cd poe-to-openai
+  cp .env.example .env  # 填入你的 Poe API Key
+  pip install -r requirements.txt
+  python run.py         # 默认运行在 http://localhost:39527
+  ```
+  在你的 Harness/zcode 中将 `OPENAI_BASE_URL` 指向 `http://localhost:39527/v1` 即可。
+
+#### 2. **`snowby666/poe-api-wrapper`**（老牌 Poe 逆向/API 封装）
+* **GitHub 地址**：[snowby666/poe-api-wrapper](https://github.com/snowby666/poe-api-wrapper)
+* **特点**：
+  * 提供了一个内置的 OpenAI Proxy Server（`poe_api_wrapper.openai`）。
+  * 支持基于 Cookie/Token 模拟调用任意 Poe Bot，并对 Function Calling 进行了补齐。
+
+---
+
+### 二、 通用“为不支持工具调用的模型补齐 Tool Call”的转接代理
+
+如果你的 Poe 请求走的是任意标准中转站（或者直接调用原生 Poe 接口），但上游模型原生不支持 `tools` 参数，可以使用通用的 Tool Emulation Proxy：
+
+#### 3. **`oct4pie/toolbridge`**（通用 Tool Calling 垫片）
+* **GitHub 地址**：[oct4pie/toolbridge](https://github.com/oct4pie/toolbridge)
+* **特点**：
+  * 专为“没有原生 Function Calling 支持的开源/云端模型”设计。
+  * 位于 Harness 和下游 API 之间：它拦截 `tools` 参数，将其转化为 Prompt（支持 JSON/XML 引导），并将模型生成的纯文本重新序列化为标准 OpenAI 的 `tool_calls` 返回。
+
+#### 4. **`ziozzang/llm-toolcall-proxy`**
+* **GitHub 地址**：[ziozzang/llm-toolcall-proxy](https://github.com/ziozzang/llm-toolcall-proxy)
+* **特点**：
+  * 基于 Flask 的轻量代理，专门拦截和转换非标/无原生支持的 Tool Call 格式并包装为 OpenAI 规范。
+  * 支持流式与非流式解析。
+
+---
+
+### 三、 选型与调试建议
+
+1. **直接对接 Poe API**：建议优先尝试 **`qingyanbaby/poe-to-openai`**，它是目前针对 Poe 平台适配度最高的转接网关之一。
+2. **跑 DeepSeek-R1 / Harness 评测时的避坑点**：
+   * 很多 Harness（如 SWE-bench 衍生工具）对 `tool_calls` 的 JSON 格式非常严格。如果模型输出带思维链 `<think>`，必须确保代理能够剥离 `<think>` 标签，否则 Harness 的正则/JSON 解析器可能会抛出 `JSONDecodeError`。

@@ -1,0 +1,659 @@
+"""
+Poe 协议层：OpenAI 格式与 Poe 官方 API（fastapi_poe SDK）之间的转换。
+
+关键设计（对应 fastapi_poe 0.0.70 的协议事实）：
+- 工具调用历史通过 Poe 协议的顶层 tool_calls / tool_results 字段传递
+  （而不是塞进消息列表），只有 stream_request_base 支持这两个字段。
+- Poe 协议没有 tool_choice，按以下规则模拟：
+    "none"                                        -> 不发送任何工具定义
+    {"type": "function", "function": {"name": X}} -> 只发送名为 X 的工具
+    "required" / "auto" / None                    -> 照常发送全部工具
+  其中 required 无法被协议强制，只是尽力而为。
+- QueryRequest 的 pydantic 模型会静默丢弃额外字段，reasoning 参数经 QueryRequest
+  传递是无效的；reasoning 标记由路由层以文本形式附加到最后一条用户消息上。
+
+工具调用的两种模式（环境变量 POE_TOOL_MODE 控制：auto / native / emulate）：
+- native：tools 直接透传给 Poe 协议（要求该 bot 在 Poe 侧支持 tools）。
+- emulate：prompt 仿真 —— 把工具 schema 注入提示词、要求模型输出约定格式的
+  JSON，代理解析后构造标准 OpenAI tool_calls 返回。用于 Poe 未接入工具协议的
+  bot（如 gemini-3.7-flash）。auto 模式下先尝试原生，被 Poe 拒绝后自动降级为
+  仿真，并在进程内缓存结论（每个 bot 只探测一次）。
+"""
+
+import json
+import logging
+import os
+import re
+
+import httpx
+from fastapi_poe import (
+    ProtocolMessage,
+    QueryRequest,
+    ToolCallDefinition,
+    ToolDefinition,
+    ToolResultDefinition,
+    get_bot_response,
+)
+from fastapi_poe.client import stream_request_base
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_TIMEOUT = 600
+
+DEFAULT_BOT = "gpt-4o"
+
+# 进程内缓存：记录已知不支持原生 tools 的 bot（auto 模式下避免重复探测失败）
+_NATIVE_TOOLS_UNSUPPORTED = {}
+
+
+# ---------- 模型映射 ----------
+
+def _load_model_mapping():
+    try:
+        return json.loads(os.environ.get("MODEL_MAPPING", "{}"))
+    except json.JSONDecodeError:
+        logger.warning("MODEL_MAPPING 不是合法 JSON，按空映射处理")
+        return {}
+
+
+def get_bot(model):
+    return _load_model_mapping().get(model, DEFAULT_BOT)
+
+
+def list_models():
+    return list(_load_model_mapping().keys())
+
+
+# ---------- HTTP 会话 ----------
+
+def create_client():
+    proxy_url = _build_proxy_url()
+    if proxy_url:
+        return httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, proxy=proxy_url)
+    return httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+
+
+def _build_proxy_url():
+    proxy_type = (os.environ.get("PROXY_TYPE") or "").lower()
+    host = os.environ.get("PROXY_HOST")
+    port = os.environ.get("PROXY_PORT")
+    if not host or not port or proxy_type not in ("http", "socks"):
+        return None
+    username = os.environ.get("PROXY_USERNAME") or ""
+    password = os.environ.get("PROXY_PASSWORD") or ""
+    auth = f"{username}:{password}@" if username else ""
+    scheme = "http" if proxy_type == "http" else "socks5"
+    return f"{scheme}://{auth}{host}:{port}"
+
+
+# ---------- 消息转换 ----------
+
+def extract_text(content):
+    """把 OpenAI 的 content（字符串或多模态数组）拍平成纯文本，非文本部分丢弃。"""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+            else:
+                parts.append(str(item))
+        return "".join(parts)
+    return str(content)
+
+
+def convert_messages(messages):
+    """
+    OpenAI messages -> (poe_messages, tool_calls, tool_results)
+
+    assistant 消息携带的 tool_calls 和 role="tool" 的工具结果不进消息列表，
+    而是收集为协议顶层字段 —— 这是 Poe 协议表达工具历史的唯一通道。
+    """
+    poe_messages = []
+    tool_calls = []
+    tool_results = []
+
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+
+        if role in ("system", "developer"):
+            content = extract_text(message.get("content"))
+            if content:
+                poe_messages.append(ProtocolMessage(role="system", content=content))
+
+        elif role == "user":
+            poe_messages.append(
+                ProtocolMessage(role="user", content=extract_text(message.get("content")))
+            )
+
+        elif role == "assistant":
+            content = extract_text(message.get("content"))
+            if content:
+                poe_messages.append(ProtocolMessage(role="bot", content=content))
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                arguments = function.get("arguments", "")
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments, ensure_ascii=False)
+                tool_calls.append(ToolCallDefinition(
+                    id=call.get("id") or f"call_{len(tool_calls)}",
+                    type=call.get("type") or "function",
+                    function=ToolCallDefinition.FunctionDefinition(
+                        name=function.get("name", ""),
+                        arguments=arguments,
+                    ),
+                ))
+
+        elif role == "tool":
+            tool_results.append(ToolResultDefinition(
+                role="tool",
+                name=message.get("name") or "",
+                tool_call_id=message.get("tool_call_id") or "",
+                content=extract_text(message.get("content")),
+            ))
+
+    return poe_messages, tool_calls or None, tool_results or None
+
+
+# ---------- 工具定义转换 ----------
+
+def convert_openai_tool_to_poe_tool(tool):
+    """OpenAI tool -> Poe ToolDefinition。properties 默认原样保留完整 JSON Schema。"""
+    if not isinstance(tool, dict) or "function" not in tool:
+        return None
+    function = tool.get("function") or {}
+    params = function.get("parameters") or {}
+    properties = params.get("properties") or {}
+
+    if os.environ.get("POE_SIMPLIFY_SCHEMAS", "").lower() in ("1", "true", "yes"):
+        # 兼容模式：某些客户端（如旧版 claude-code-router）的复杂 schema 会被 Poe
+        # 拒绝时才开启，会把 allOf / 联合类型降级为简单类型
+        properties = {
+            name: _simplify_parameter_definition(definition)
+            for name, definition in properties.items()
+        }
+
+    return ToolDefinition(
+        type="function",
+        function=ToolDefinition.FunctionDefinition(
+            name=function.get("name", ""),
+            description=function.get("description", ""),
+            parameters=ToolDefinition.FunctionDefinition.ParametersDefinition(
+                type=params.get("type", "object"),
+                properties=properties,
+                required=params.get("required") or None,
+            ),
+        ),
+    )
+
+
+def _simplify_parameter_definition(param_def):
+    """把 allOf / 联合类型等复杂参数定义降级为简单类型（兼容模式专用）。"""
+    if not isinstance(param_def, dict):
+        return param_def
+
+    if "allOf" in param_def:
+        simplified = {}
+        for schema in param_def["allOf"]:
+            if isinstance(schema, dict) and "type" in schema:
+                param_type = schema["type"]
+                simplified["type"] = param_type[0] if isinstance(param_type, list) else param_type
+                break
+        for key in ("default", "description"):
+            if key in param_def:
+                simplified[key] = param_def[key]
+        return simplified
+
+    if isinstance(param_def.get("type"), list):
+        simplified = dict(param_def)
+        simplified["type"] = param_def["type"][0]
+        return simplified
+
+    return param_def
+
+
+def select_tools(tools, tool_choice):
+    """按 tool_choice 过滤要发给 Poe 的工具（模拟规则见模块 docstring）。"""
+    if not tools:
+        return None
+    if tool_choice == "none":
+        return None
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        name = (tool_choice.get("function") or {}).get("name")
+        selected = [t for t in tools if (t.get("function") or {}).get("name") == name]
+        if selected:
+            return selected
+        logger.warning("tool_choice 指定的函数 %r 不在 tools 中，忽略该限制", name)
+    elif tool_choice == "required":
+        logger.info("tool_choice=required 无法被 Poe 协议强制，按 auto 处理")
+    return tools
+
+
+# ---------- prompt 仿真模式（为不支持原生 tools 的 bot 补齐工具调用） ----------
+
+_TOOLS_PROMPT_TEMPLATE = """
+# Tools
+
+You have access to the following functions:
+
+{schemas}
+
+When you need to call one or more functions, your ENTIRE reply must be a single
+json code block in EXACTLY this format, with no other text before or after it:
+
+```json
+{{"tool_calls": [{{"name": "<function_name>", "arguments": {{"<arg>": "<value>"}}}}]}}
+```
+
+Rules:
+- "arguments" must be a JSON object matching the function's parameters schema.
+- Call a function ONLY when it helps answer the user's request; otherwise reply
+  normally in plain text, WITHOUT any json block.
+- Do not wrap the json block in any explanation. Do not invent functions that
+  are not listed above.{extra}"""
+
+_TOOLS_PROMPT_REQUIRED = "\n- In this conversation you MUST call at least one function."
+_TOOLS_PROMPT_FORCED = "\n- In this conversation you MUST call the function \"{name}\"."
+
+
+def build_tools_prompt(tools, tool_choice=None):
+    """把 OpenAI tools 定义渲染成注入系统提示词的文本。"""
+    schemas = json.dumps(
+        [t.get("function", {}) for t in tools if isinstance(t, dict)],
+        ensure_ascii=False, indent=2,
+    )
+    extra = ""
+    if tool_choice == "required":
+        extra = _TOOLS_PROMPT_REQUIRED
+    elif isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        name = (tool_choice.get("function") or {}).get("name")
+        if name:
+            extra = _TOOLS_PROMPT_FORCED.format(name=name)
+    return _TOOLS_PROMPT_TEMPLATE.format(schemas=schemas, extra=extra)
+
+
+def fold_tool_history(messages):
+    """
+    仿真模式下折叠工具历史：
+    - assistant 的 tool_calls 序列化为约定格式的 json 代码块（与提示词约定一致）
+    - role="tool" 的工具结果包装成 user 文本消息
+    """
+    folded = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+
+        if role == "assistant":
+            text = extract_text(message.get("content"))
+            calls = []
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                arguments = function.get("arguments", {})
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        pass
+                calls.append({"name": function.get("name", ""), "arguments": arguments})
+            if calls:
+                block = "```json\n" + json.dumps(
+                    {"tool_calls": calls}, ensure_ascii=False
+                ) + "\n```"
+                text = (text + "\n\n" + block).strip() if text else block
+            if text:
+                folded.append({"role": "assistant", "content": text})
+
+        elif role == "tool":
+            name = message.get("name") or message.get("tool_call_id") or "tool"
+            content = extract_text(message.get("content"))
+            folded.append({
+                "role": "user",
+                "content": f"[Tool result for {name}]\n{content}",
+            })
+
+        else:
+            folded.append(message)
+    return folded
+
+
+def inject_tools_prompt(messages, tools, tool_choice=None):
+    """在消息列表中注入工具提示词（追加到已有 system 消息，或新建一条）。"""
+    prompt = build_tools_prompt(tools, tool_choice)
+    messages = [dict(m) for m in messages if isinstance(m, dict)]
+    for m in messages:
+        if m.get("role") == "system":
+            m["content"] = extract_text(m.get("content")) + "\n" + prompt
+            return messages
+    return [{"role": "system", "content": prompt}] + messages
+
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*)\s*```", re.DOTALL)
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def parse_tool_calls_from_text(text):
+    """
+    从模型纯文本输出中解析工具调用。
+    成功返回 OpenAI delta 格式的 tool_calls 列表；没有工具调用返回 None。
+    能容忍 <think> 思考块、json 代码块、以及夹杂在正文里的裸 JSON。
+    """
+    if not text:
+        return None
+
+    cleaned = _THINK_RE.sub("", text)
+    candidates = _JSON_FENCE_RE.findall(cleaned)
+
+    # 裸 JSON 兜底：用 raw_decode 扫描每个 "{" 起始的对象
+    decoder = json.JSONDecoder()
+    idx = cleaned.find("{")
+    while idx != -1:
+        try:
+            obj, _ = decoder.raw_decode(cleaned[idx:])
+            if isinstance(obj, dict):
+                candidates.append(json.dumps(obj))
+            idx = cleaned.find("{", idx + 1)
+        except json.JSONDecodeError:
+            idx = cleaned.find("{", idx + 1)
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        calls = parsed.get("tool_calls") if isinstance(parsed, dict) else None
+        if isinstance(parsed, list):
+            calls = parsed
+        if not isinstance(calls, list) or not calls:
+            continue
+
+        result = []
+        for i, call in enumerate(calls):
+            if not isinstance(call, dict):
+                break
+            function = call.get("function") or {}
+            name = call.get("name") or function.get("name")
+            if not name:
+                break
+            arguments = call.get("arguments", function.get("arguments", {}))
+            if not isinstance(arguments, str):
+                arguments = json.dumps(arguments, ensure_ascii=False)
+            result.append({
+                "index": i,
+                "id": call.get("id") or f"call_{i}",
+                "type": "function",
+                "function": {"name": name, "arguments": arguments},
+            })
+        else:
+            if result:
+                return result
+    return None
+
+
+def strip_tool_json_block(text):
+    """解析出工具调用后，把 json 代码块从正文中剔除，返回剩余文本。"""
+    if not text:
+        return ""
+    cleaned = _THINK_RE.sub("", text)
+    cleaned = _JSON_FENCE_RE.sub("", cleaned)
+    return cleaned.strip()
+
+
+# ---------- 查询构造 ----------
+
+def _build_query(poe_messages, temperature=None, stop_sequences=None):
+    return QueryRequest(
+        query=poe_messages,
+        user_id="",
+        conversation_id="",
+        message_id="",
+        version="1.0",
+        type="query",
+        temperature=temperature if temperature is not None else 0.7,
+        skip_system_prompt=False,
+        logit_bias={},
+        stop_sequences=stop_sequences or [],
+    )
+
+
+def _normalize_tool_delta(raw):
+    """把 Poe 返回的原始 tool_calls 增量归一化为 OpenAI delta 格式。"""
+    if not isinstance(raw, dict):
+        raw = raw.model_dump() if hasattr(raw, "model_dump") else {}
+    function = raw.get("function") or {}
+    return {
+        "index": raw.get("index") or 0,
+        "id": raw.get("id"),
+        "type": raw.get("type") or "function",
+        "function": {
+            "name": function.get("name"),
+            "arguments": function.get("arguments") or "",
+        },
+    }
+
+
+def merge_tool_delta(aggregated, delta):
+    """把一条 tool_calls 增量合并进按 index 聚合的字典（就地修改）。"""
+    index = delta["index"]
+    entry = aggregated.setdefault(index, {
+        "index": index,
+        "id": None,
+        "type": "function",
+        "function": {"name": None, "arguments": ""},
+    })
+    if delta.get("id"):
+        entry["id"] = delta["id"]
+    if delta.get("type"):
+        entry["type"] = delta["type"]
+    function = delta.get("function") or {}
+    if function.get("name"):
+        entry["function"]["name"] = function["name"]
+    if function.get("arguments"):
+        entry["function"]["arguments"] += function["arguments"]
+
+
+def _is_tool_rejection(exception):
+    """判断异常是否是 Poe 因 tools 参数拒绝请求。"""
+    return "tool" in str(exception).lower()
+
+
+# ---------- 底层查询流（原生协议） ----------
+
+async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
+                         temperature=None, stop_sequences=None, session=None):
+    """
+    直接走 Poe 协议的查询流，产出归一化事件：
+      {"kind": "text", "text": str}
+      {"kind": "tool_calls", "tool_calls": [delta...]}
+      {"kind": "replace"}
+    """
+    poe_messages, history_tool_calls, history_tool_results = convert_messages(messages)
+    query = _build_query(poe_messages, temperature, stop_sequences)
+
+    selected = select_tools(tools, tool_choice)
+    poe_tools = None
+    if selected:
+        converted = (convert_openai_tool_to_poe_tool(t) for t in selected)
+        poe_tools = [t for t in converted if t is not None] or None
+
+    if session is None:
+        session = create_client()
+
+    async for message in stream_request_base(
+        request=query,
+        bot_name=get_bot(model),
+        api_key=api_key,
+        tools=poe_tools,
+        tool_calls=history_tool_calls,
+        tool_results=history_tool_results,
+        session=session,
+    ):
+        data = getattr(message, "data", None)
+
+        # OpenAI 风格的增量块（带工具定义的查询走这里）
+        if data and data.get("choices"):
+            choice = data["choices"][0]
+            if choice.get("finish_reason") is not None:
+                continue
+            delta = choice.get("delta") or {}
+            if delta.get("tool_calls"):
+                yield {
+                    "kind": "tool_calls",
+                    "tool_calls": [_normalize_tool_delta(d) for d in delta["tool_calls"]],
+                }
+            elif delta.get("content"):
+                yield {"kind": "text", "text": delta["content"]}
+            continue
+
+        # 普通文本事件（不带工具定义的查询走这里）
+        if getattr(message, "is_suggested_reply", False):
+            continue
+        if getattr(message, "is_replace_response", False):
+            yield {"kind": "replace"}
+        text = getattr(message, "text", "")
+        if text:
+            yield {"kind": "text", "text": text}
+
+
+# ---------- 仿真模式查询 ----------
+
+async def _emulated_events(api_key, messages, model, tools, tool_choice,
+                           temperature, stop_sequences, session):
+    """
+    prompt 仿真：注入工具提示词 + 折叠工具历史 -> 普通查询 -> 解析输出。
+    注意：工具调用的判定依赖完整回复，所以仿真模式会先聚合全部文本再产出事件。
+    """
+    emulated_messages = fold_tool_history(messages)
+    emulated_messages = inject_tools_prompt(emulated_messages, tools, tool_choice)
+
+    text_parts = []
+    async for event in _native_stream(
+        api_key, emulated_messages, model, tools=None, tool_choice=None,
+        temperature=temperature, stop_sequences=stop_sequences, session=session,
+    ):
+        if event["kind"] == "text":
+            text_parts.append(event["text"])
+        elif event["kind"] == "replace":
+            text_parts.clear()
+
+    full_text = "".join(text_parts)
+    tool_calls = parse_tool_calls_from_text(full_text)
+    if tool_calls:
+        remaining = strip_tool_json_block(full_text)
+        if remaining:
+            yield {"kind": "text", "text": remaining}
+        yield {"kind": "tool_calls", "tool_calls": tool_calls}
+    else:
+        if full_text:
+            yield {"kind": "text", "text": full_text}
+
+
+# ---------- 对外统一入口 ----------
+
+async def query_stream(api_key, messages, model, tools=None, tool_choice=None,
+                       temperature=None, stop_sequences=None, session=None):
+    """
+    归一化的事件流。带 tools 时按 POE_TOOL_MODE 决定走原生协议还是 prompt 仿真：
+      auto（默认）：先试原生，被 Poe 以"不支持 tools"拒绝后自动降级仿真并缓存结论
+      native：只用原生协议
+      emulate：只用 prompt 仿真
+    """
+    mode = os.environ.get("POE_TOOL_MODE", "auto").lower()
+    bot = get_bot(model)
+
+    use_emulation = False
+    if tools and tool_choice != "none":
+        if mode == "emulate":
+            use_emulation = True
+        elif mode == "auto" and _NATIVE_TOOLS_UNSUPPORTED.get(bot):
+            use_emulation = True
+
+    if tools and not use_emulation:
+        yielded_any = False
+        try:
+            async for event in _native_stream(
+                api_key, messages, model, tools, tool_choice,
+                temperature, stop_sequences, session,
+            ):
+                yielded_any = True
+                yield event
+            return
+        except Exception as e:
+            # 已经给客户端发过内容就不能降级了；原生强制模式下也不降级
+            if yielded_any or mode == "native" or not _is_tool_rejection(e):
+                raise
+            _NATIVE_TOOLS_UNSUPPORTED[bot] = True
+            logger.warning("bot %s 不支持原生 tools（%s），本次起切换为 prompt 仿真", bot, e)
+            use_emulation = True
+
+    if use_emulation:
+        async for event in _emulated_events(
+            api_key, messages, model, tools, tool_choice,
+            temperature, stop_sequences, session,
+        ):
+            yield event
+        return
+
+    async for event in _native_stream(
+        api_key, messages, model, tools, tool_choice,
+        temperature, stop_sequences, session,
+    ):
+        yield event
+
+
+async def get_responses(api_key, messages, model, tools=None, tool_choice=None,
+                        temperature=None, stop_sequences=None, session=None):
+    """非流式查询：聚合完整文本和完整的 tool_calls 列表。"""
+    text_parts = []
+    aggregated = {}
+
+    async for event in query_stream(
+        api_key, messages, model, tools, tool_choice, temperature, stop_sequences, session
+    ):
+        if event["kind"] == "text":
+            text_parts.append(event["text"])
+        elif event["kind"] == "replace":
+            text_parts.clear()
+        elif event["kind"] == "tool_calls":
+            for delta in event["tool_calls"]:
+                merge_tool_delta(aggregated, delta)
+
+    tool_calls = [aggregated[i] for i in sorted(aggregated)] or None
+    if tool_calls:
+        # 非流式响应要求完整的 tool_call 对象
+        for i, call in enumerate(tool_calls):
+            call["id"] = call["id"] or f"call_{i}"
+            call["type"] = call["type"] or "function"
+            call["function"]["name"] = call["function"]["name"] or ""
+
+    return {"text": "".join(text_parts), "tool_calls": tool_calls}
+
+
+# ---------- 图像生成 ----------
+
+async def get_image(api_key, prompt, model="dall-e-3", session=None):
+    """调用 Poe 图像机器人，返回 markdown 图片链接或附件 URL。"""
+    if session is None:
+        session = create_client()
+
+    result = ""
+    async for partial in get_bot_response(
+        messages=[ProtocolMessage(role="user", content=prompt)],
+        bot_name=get_bot(model),
+        api_key=api_key,
+        skip_system_prompt=False,
+        session=session,
+    ):
+        attachment = getattr(partial, "attachment", None)
+        if attachment is not None and getattr(attachment, "url", ""):
+            result = attachment.url
+        elif partial.text and ("http" in partial.text or partial.text.startswith("![")):
+            result = partial.text
+
+    return result
