@@ -46,6 +46,18 @@ DEFAULT_BOT = "gpt-4o"
 _NATIVE_TOOLS_UNSUPPORTED = {}
 
 
+# ---------- 诊断日志（POE_DEBUG_LOG=1 时启用，输出到 WARNING，前缀 DIAG） ----------
+
+def _debug_enabled():
+    return os.environ.get("POE_DEBUG_LOG", "").lower() in ("1", "true", "yes")
+
+
+def _dlog(msg, *args):
+    """诊断日志。仅在 POE_DEBUG_LOG 开启时输出；可能包含内容片段，仅用于临时排障。"""
+    if _debug_enabled():
+        logger.warning("DIAG " + msg, *args)
+
+
 # ---------- 模型映射 ----------
 
 def _load_model_mapping():
@@ -485,40 +497,59 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
     if session is None:
         session = create_client()
 
-    async for message in stream_request_base(
-        request=query,
-        bot_name=get_bot(model),
-        api_key=api_key,
-        tools=poe_tools,
-        tool_calls=history_tool_calls,
-        tool_results=history_tool_results,
-        session=session,
-    ):
-        data = getattr(message, "data", None)
+    bot_name = get_bot(model)
+    _dlog("native_stream 开始: bot=%s messages=%d tools=%d history_calls=%d history_results=%d",
+          bot_name, len(poe_messages), len(poe_tools or []),
+          len(history_tool_calls or []), len(history_tool_results or []))
 
-        # OpenAI 风格的增量块（带工具定义的查询走这里）
-        if data and data.get("choices"):
-            choice = data["choices"][0]
-            if choice.get("finish_reason") is not None:
+    event_count = 0
+    text_len = 0
+    try:
+        async for message in stream_request_base(
+            request=query,
+            bot_name=bot_name,
+            api_key=api_key,
+            tools=poe_tools,
+            tool_calls=history_tool_calls,
+            tool_results=history_tool_results,
+            session=session,
+        ):
+            event_count += 1
+            data = getattr(message, "data", None)
+
+            # OpenAI 风格的增量块（带工具定义的查询走这里）
+            if data and data.get("choices"):
+                choice = data["choices"][0]
+                if choice.get("finish_reason") is not None:
+                    _dlog("native_stream: bot=%s 收到 finish_reason=%s (events=%d 文本=%d字符)",
+                          bot_name, choice.get("finish_reason"), event_count, text_len)
+                    continue
+                delta = choice.get("delta") or {}
+                if delta.get("tool_calls"):
+                    yield {
+                        "kind": "tool_calls",
+                        "tool_calls": [_normalize_tool_delta(d) for d in delta["tool_calls"]],
+                    }
+                elif delta.get("content"):
+                    text_len += len(delta["content"])
+                    yield {"kind": "text", "text": delta["content"]}
                 continue
-            delta = choice.get("delta") or {}
-            if delta.get("tool_calls"):
-                yield {
-                    "kind": "tool_calls",
-                    "tool_calls": [_normalize_tool_delta(d) for d in delta["tool_calls"]],
-                }
-            elif delta.get("content"):
-                yield {"kind": "text", "text": delta["content"]}
-            continue
 
-        # 普通文本事件（不带工具定义的查询走这里）
-        if getattr(message, "is_suggested_reply", False):
-            continue
-        if getattr(message, "is_replace_response", False):
-            yield {"kind": "replace"}
-        text = getattr(message, "text", "")
-        if text:
-            yield {"kind": "text", "text": text}
+            # 普通文本事件（不带工具定义的查询走这里）
+            if getattr(message, "is_suggested_reply", False):
+                continue
+            if getattr(message, "is_replace_response", False):
+                _dlog("native_stream: bot=%s 收到 replace_response（清空已收文本）", bot_name)
+                yield {"kind": "replace"}
+            text = getattr(message, "text", "")
+            if text:
+                text_len += len(text)
+                yield {"kind": "text", "text": text}
+    except Exception as e:
+        _dlog("native_stream 异常: bot=%s events=%d 已收文本=%d字符 error=%r",
+              bot_name, event_count, text_len, e)
+        raise
+    _dlog("native_stream 结束: bot=%s events=%d 文本=%d字符", bot_name, event_count, text_len)
 
 
 # ---------- 仿真模式查询 ----------
@@ -546,10 +577,15 @@ async def _emulated_events(api_key, messages, model, tools, tool_choice,
     tool_calls = parse_tool_calls_from_text(full_text)
     if tool_calls:
         remaining = strip_tool_json_block(full_text)
+        _dlog("emulated: bot=%s 原文=%d字符 -> 解析出 %d 个工具调用，剩余文本 %d 字符",
+              get_bot(model), len(full_text), len(tool_calls), len(remaining))
         if remaining:
             yield {"kind": "text", "text": remaining}
         yield {"kind": "tool_calls", "tool_calls": tool_calls}
     else:
+        # 未解析到工具调用：记录原文长度和尾部预览（判断是否被 Poe 截断在 JSON 中途）
+        _dlog("emulated: bot=%s 原文=%d字符，未解析到工具调用。尾部预览: %r",
+              get_bot(model), len(full_text), full_text[-120:])
         if full_text:
             yield {"kind": "text", "text": full_text}
 
@@ -573,6 +609,10 @@ async def query_stream(api_key, messages, model, tools=None, tool_choice=None,
             use_emulation = True
         elif mode == "auto" and _NATIVE_TOOLS_UNSUPPORTED.get(bot):
             use_emulation = True
+
+    _dlog("query_stream: model=%s bot=%s POE_TOOL_MODE=%s tools=%d tool_choice=%s -> %s",
+          model, bot, mode, len(tools or []), tool_choice,
+          "emulate" if use_emulation else ("native" if tools else "无工具普通查询"))
 
     if tools and not use_emulation:
         yielded_any = False

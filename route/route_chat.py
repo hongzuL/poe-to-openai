@@ -155,9 +155,13 @@ def stream_chunk(model, delta, finish_reason=None, usage=None, include_role=Fals
 
 async def openai_event_stream(model, messages, api_key, tools, tool_choice,
                               temperature, stop_sequences, session):
+    req_id = utils.get_8_random_str()
     text_chunks = []
     had_tool_calls = False
     first_chunk = True
+    n_chunks = 0
+    poe_api._dlog("流式开始 %s: model=%s messages=%d tools=%d",
+                  req_id, model, len(messages), len(tools or []))
 
     try:
         async for event in poe_api.query_stream(api_key, messages, model, tools, tool_choice,
@@ -166,23 +170,30 @@ async def openai_event_stream(model, messages, api_key, tools, tool_choice,
                 text_chunks.append(event["text"])
                 chunk = stream_chunk(model, {"content": event["text"]}, include_role=first_chunk)
                 first_chunk = False
+                n_chunks += 1
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             elif event["kind"] == "tool_calls":
                 had_tool_calls = True
                 chunk = stream_chunk(model, {"tool_calls": event["tool_calls"]}, include_role=first_chunk)
                 first_chunk = False
+                n_chunks += 1
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             elif event["kind"] == "replace":
                 # 已发送的 chunk 无法撤回，只能停止累计 usage 的旧文本
                 text_chunks.clear()
     except Exception as e:
         logger.error("Poe 上游请求失败: %s: %s", type(e).__name__, e)
+        poe_api._dlog("流式异常 %s: model=%s 已发chunks=%d 已发文本=%d字符 error=%r",
+                      req_id, model, n_chunks, sum(len(t) for t in text_chunks), e)
         yield f"data: {json.dumps(stream_chunk(model, {}, finish_reason='stop'), ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
         return
 
     usage = calculate_usage(prompt_text(messages), "".join(text_chunks), model)
     finish_reason = "tool_calls" if had_tool_calls else "stop"
+    poe_api._dlog("流式结束 %s: model=%s chunks=%d 文本=%d字符 tool_calls=%s finish=%s",
+                  req_id, model, n_chunks, sum(len(t) for t in text_chunks),
+                  had_tool_calls, finish_reason)
     final_chunk = stream_chunk(model, {}, finish_reason=finish_reason, usage=usage)
     yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
     yield "data: [DONE]\n\n"
@@ -190,6 +201,9 @@ async def openai_event_stream(model, messages, api_key, tools, tool_choice,
 
 async def default_response(model, messages, api_key, tools, tool_choice,
                            temperature, stop_sequences, session):
+    req_id = utils.get_8_random_str()
+    poe_api._dlog("非流式开始 %s: model=%s messages=%d tools=%d",
+                  req_id, model, len(messages), len(tools or []))
     try:
         result = await poe_api.get_responses(api_key, messages, model, tools, tool_choice,
                                              temperature, stop_sequences, session)
@@ -197,6 +211,10 @@ async def default_response(model, messages, api_key, tools, tool_choice,
         logger.error("Poe 上游请求失败: %s: %s", type(e).__name__, e)
         detail = str(e)[:300] or type(e).__name__
         return error_response(502, f"上游 Poe 请求失败: {detail}", "upstream_error")
+
+    poe_api._dlog("非流式结束 %s: model=%s 文本=%d字符 tool_calls=%d",
+                  req_id, model, len(result["text"]),
+                  len(result.get("tool_calls") or []))
 
     usage = calculate_usage(prompt_text(messages), result["text"], model)
 
