@@ -466,6 +466,48 @@ def _escape_control_chars_in_strings(text):
     return "".join(result)
 
 
+def _balance_json(text):
+    """补全模型输出中缺失的闭合括号/引号，并剔除多余/类型不匹配的闭括号。
+    模型常漏闭合（如 {"tool_calls": [{...}}] 少了一个 ]）、错用括号类型（}} 代替 }]）
+    或响应被截断在字符串中途。逐字符扫描维护括号栈并重建文本：匹配失败的闭括号
+    直接丢弃，末尾按栈补全；字符串中途截断则先补引号。"""
+    stack = []
+    in_string = False
+    escaped = False
+    out = []
+    for ch in text:
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string:
+            out.append(ch)
+            continue
+        if ch in "{[":
+            stack.append(ch)
+            out.append(ch)
+            continue
+        if ch in "}]":
+            if stack and ((ch == "}" and stack[-1] == "{") or (ch == "]" and stack[-1] == "[")):
+                stack.pop()
+                out.append(ch)
+            # 不匹配/多余的闭括号：剔除（模型多写或用错括号类型）
+            continue
+        out.append(ch)
+    suffix = '"' if in_string else ""
+    closers = {"{": "}", "[": "]"}
+    suffix += "".join(closers[c] for c in reversed(stack))
+    return "".join(out) + suffix
+
+
 def _repair_json(text):
     """尝试修复常见的 JSON 格式问题（模型输出 JSON 时常犯的错误）。"""
     # 1. 转义字符串内的原始控制字符（多行命令/代码参数最常见）
@@ -477,7 +519,12 @@ def _repair_json(text):
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    # 3. 尝试用 ast.literal_eval 解析 Python 字典格式
+    # 4. 括号/引号配平后再解析（模型漏闭合括号或响应被截断）
+    try:
+        return json.loads(_balance_json(text))
+    except json.JSONDecodeError:
+        pass
+    # 5. 尝试用 ast.literal_eval 解析 Python 字典格式
     try:
         import ast
         obj = ast.literal_eval(text)
@@ -511,7 +558,7 @@ def parse_tool_calls_from_text(text):
     cleaned = _strip_thinking(text)
     candidates = _JSON_FENCE_RE.findall(cleaned)
 
-    # 裸 JSON 兜底：用 raw_decode 扫描每个 "{" 起始的对象
+    # 裸 JSON 兜底：用 raw_decode 扫描每个 "{" 起始的对象；失败时尝试配平修复
     decoder = json.JSONDecoder()
     idx = cleaned.find("{")
     while idx != -1:
@@ -521,6 +568,9 @@ def parse_tool_calls_from_text(text):
                 candidates.append(json.dumps(obj))
             idx = cleaned.find("{", idx + 1)
         except json.JSONDecodeError:
+            repaired = _repair_json(cleaned[idx:])
+            if isinstance(repaired, dict):
+                candidates.append(json.dumps(repaired, ensure_ascii=False))
             idx = cleaned.find("{", idx + 1)
 
     for candidate in candidates:
