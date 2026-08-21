@@ -326,6 +326,9 @@ Rules:
 - Inside heredoc blocks write content EXACTLY as-is: NEVER escape quotes,
   NEVER add backslashes, NEVER convert newlines to \\n.
 - You may output several <<<tool_call>>> blocks in one reply.
+- If you announce an action (e.g. "I will read X"), you MUST execute it with a
+  <<<tool_call>>> block in the SAME reply. Never end a reply with only an
+  announcement of what you are about to do.
 - Call a function ONLY when it helps answer the user's request; otherwise reply
   normally in plain text, WITHOUT any tool_call block.
 - Do not invent functions that are not listed above.{extra}"""
@@ -900,27 +903,68 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
 
 # ---------- 仿真模式查询 ----------
 
+# 模型"只宣布意图未执行"的判别（短文本 + 意图词，且无工具调用）
+_INTENT_RE = re.compile(
+    r"(i'?m going to|i will|i'?ll\b|let me|我将|我会|我先|我来|接下来我|首先我|now i will|first i will)",
+    re.IGNORECASE,
+)
+
+_CONTINUATION_NUDGE = (
+    "[System: You announced an action but did not execute it. "
+    "Execute it NOW with a <<<tool_call>>> block — or if no tool is needed, "
+    "give the final answer directly. Do not announce; act.]"
+)
+
+
 async def _emulated_events(api_key, messages, model, tools, tool_choice,
                            temperature, stop_sequences, session):
     """
     prompt 仿真：注入工具提示词 + 折叠工具历史 -> 普通查询 -> 解析输出。
     注意：工具调用的判定依赖完整回复，所以仿真模式会先聚合全部文本再产出事件。
+    模型"只宣布意图未执行"（announce-only）时自动续一轮：把宣告作为 assistant
+    消息回传并附加强制提示，最多续一次。
     """
     emulated_messages = fold_tool_history(messages)
     emulated_messages = inject_tools_prompt(emulated_messages, tools, tool_choice)
 
-    text_parts = []
-    async for event in _native_stream(
-        api_key, emulated_messages, model, tools=None, tool_choice=None,
-        temperature=temperature, stop_sequences=stop_sequences, session=session,
-    ):
-        if event["kind"] == "text":
-            text_parts.append(event["text"])
-        elif event["kind"] == "replace":
-            text_parts.clear()
+    current = emulated_messages
+    full_text = ""
+    tool_calls = None
 
-    full_text = "".join(text_parts)
-    tool_calls = parse_tool_calls_from_text(full_text)
+    for attempt in range(2):
+        text_parts = []
+        async for event in _native_stream(
+            api_key, current, model, tools=None, tool_choice=None,
+            temperature=temperature, stop_sequences=stop_sequences, session=session,
+        ):
+            if event["kind"] == "text":
+                text_parts.append(event["text"])
+            elif event["kind"] == "replace":
+                text_parts.clear()
+
+        chunk = "".join(text_parts)
+        full_text = chunk if not full_text else full_text + "\n" + chunk
+        tool_calls = parse_tool_calls_from_text(chunk)
+        if tool_calls:
+            break
+
+        stripped_chunk = _strip_thinking(chunk)
+        if not stripped_chunk:
+            # 纯思考响应：瞬态错误，由 query_stream 重试
+            raise RuntimeError(
+                f"Poe returned empty response (thinking-only) for bot {get_bot(model)}"
+            )
+        # 意图宣告未执行（短文本 + 意图词）：续一轮强制其行动
+        if attempt == 0 and len(stripped_chunk) < 600 and _INTENT_RE.search(stripped_chunk):
+            _dlog("emulated: bot=%s 检测到意图宣告但未执行（%d字符），自动续一轮",
+                  get_bot(model), len(stripped_chunk))
+            current = current + [
+                {"role": "assistant", "content": chunk},
+                {"role": "user", "content": _CONTINUATION_NUDGE},
+            ]
+            continue
+        break
+
     if tool_calls:
         remaining = strip_tool_json_block(full_text)
         _dlog("emulated: bot=%s 原文=%d字符 -> 解析出 %d 个工具调用，剩余文本 %d 字符",
@@ -932,8 +976,6 @@ async def _emulated_events(api_key, messages, model, tools, tool_choice,
         # 未解析到工具调用：记录原文长度和尾部预览（判断是否被 Poe 截断在 JSON 中途）
         _dlog("emulated: bot=%s 原文=%d字符，未解析到工具调用。尾部预览: %r",
               get_bot(model), len(full_text), full_text[-120:])
-        # 纯思考响应（剥离 thinking 后为空）：gemini 系模型的"只思考不回答"概率性故障，
-        # 作为瞬态错误抛出，由 query_stream 的重试循环重试
         stripped = _strip_thinking(full_text)
         if not stripped:
             raise RuntimeError(
