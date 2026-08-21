@@ -6,7 +6,7 @@
 
 基于 [Poe](https://poe.com) 官方 API 构建的 OpenAI 格式代理服务，支持 `/v1/chat/completions`、`/v1/models` 以及 `/v1/images/generations`。
 
-**核心亮点**：支持完整的 Agent 工具调用（Tool Use / Function Calling）、Prompt 仿真降级模式、流式超时防卡死机制、强制接口鉴权与轻量化运维管理。
+**核心亮点**：支持完整的 Agent 工具调用（Tool Use / Function Calling）、Heredoc 提示词仿真模式 (v2)、流式超时防挂起与瞬态故障重试、强制接口鉴权与轻量化运维管理。
 
 [English Documentation (README.md)](README.md) | [模型列表与定价 (MODELS.md)](MODELS.md) | [部署说明 (部署说明.md)](部署说明.md) | [改造总结 (改动总结.md)](改动总结.md)
 
@@ -15,22 +15,25 @@
 ## ✨ 核心特性
 
 - **完整的工具调用（Tool / Function Calling）支持**：
-  - **原生协议模式 (`native`)**：通过 `fastapi_poe` 底层 `stream_request_base` 协议透传 `tools`，规范传递顶层 `tool_calls` 与 `role: tool` 结果，支持完整的多轮 Agent 回路。
-  - **Prompt 仿真模式 (`emulate`)**：将工具 Schema 自动注入 System Prompt，解析模型输出的 JSON 为标准 OpenAI `tool_calls`。**让原本在 Poe 上不支持 tools 的模型（如 `gemini-3.7-flash`）也能用于 Agent 客户端**。
-  - **自动降级模式 (`auto`, 默认)**：优先尝试原生协议，若 Poe 上游提示不支持 tools，则自动无缝降级为仿真模式（进程内缓存判断结果）。
-- **完善的超时防护与错误响应**：
-  - **首事件与总耗时双重超时保护**：`POE_FIRST_EVENT_TIMEOUT`（默认 30 秒）和 `POE_STREAM_TIMEOUT`（默认 120 秒），杜绝上游无响应导致的无休止挂起。
-  - **SSE 保活心跳**：仿真模式或慢响应时每 15 秒发送 `: keepalive`，防止客户端连接超时断开。
-  - **精准错误透传**：遇到上游 `BotError` 或网络异常时即时返回明确错误提示。
-- **企业级安全与可靠性**：
+  - **原生协议模式 (`native`)**：基于 `fastapi_poe` 底层 `stream_request_base` 直达协议层，规范传递顶层 `tool_calls` 与 `role: tool` 结果，修复了 `tool_call_id` 丢失及 `content=None` 导致的断流问题，支持完整的多轮 Agent 回路。
+  - **Prompt 仿真模式 v2 (`emulate`)**：针对 Poe 原生不支持工具协议的模型（如 `gemini-3.7-flash`），采用健壮的 **Heredoc 分隔符格式**，彻底避免 JSON 代码字符串转义损坏问题；同时支持 `<think>` 标签和 Poe Markdown 思考块（`*Thinking...*` + `>` 引用）清洗与自动意图宣告补偿（Announce-Only 自动续轮提醒）。
+  - **自动降级模式 (`auto`, 默认)**：优先尝试原生协议，若 Poe 上游提示不支持 tools，则自动无缝降级为仿真模式（进程内缓存判断结果，单 bot 仅探测一次）。
+- **完善的超时防护与瞬态故障恢复**：
+  - **双重流式超时保护**：`POE_FIRST_EVENT_TIMEOUT`（默认 30 秒）防首字卡死，`POE_STREAM_TIMEOUT`（默认 120 秒）防长流挂起，替代无休止等待。
+  - **瞬态故障重试**：`POE_RETRY_COUNT`（默认 2 次），覆盖上游临时 `BotError`、空响应与纯思考无动作场景。
+  - **SSE 保活心跳**：仿真模式或慢响应时每 15 秒发送 `: keepalive`，防止网关和客户端超时断开。
+  - **精准错误透传**：遇到上游错误时即时返回包含真实原因的清晰错误响应。
+- **企业级安全加固**：
   - **强制 Bearer Token 鉴权**：通过 `CUSTOM_TOKEN` 与常量时间校验（`secrets.compare_digest`）保护所有 `/v1/` 接口，未授权直接 401。
   - **安全脱敏日志**：默认 WARNING 级别，不记录 Token 与对话明文；支持按需开启排障诊断日志（`POE_DEBUG_LOG=1`）。
+  - **CORS 保护**：默认不反射任意来源，支持通过 `ALLOWED_ORIGINS` 精确指定。
   - **连接池生命周期管理**：采用 FastAPI lifespan 单例共享 `httpx.AsyncClient`，杜绝连接泄漏。
-- **现代化模型映射**：
+- **现代化模型映射与图像支持**：
   - 收录 28 个经 Poe 官方实测的现役模型 ID（小写标准名称：`gpt-5.4`、`claude-sonnet-4.6`、`claude-opus-4.8`、`gemini-3.5-flash` 等）。
-  - 支持最新生图模型（`gpt-image-2`、`flux-2-dev`、`flux-2-pro`、`nano-banana-2` 等）。
+  - 完整支持最新生图模型（`gpt-image-2`、`flux-2-dev`、`flux-2-pro`、`nano-banana-2`、`seedream-5.0-pro`），自动按请求尺寸计算正确的宽高比。
+  - 详细 341 款可用模型与计费参考请查阅 [MODELS.md (模型列表与定价)](MODELS.md)。
 - **极简部署与运维**：
-  - 提供完善的 macOS / Linux 管理脚本（`configure.sh`、`start.sh`），内置端口占用检测、依赖增量安装与安全权限管理（`.env` 权限 600）。
+  - 提供完善的 macOS / Linux 管理脚本（`configure.sh`、`start.sh`），内置端口占用检测、重复 API Key 检测、依赖增量安装与安全权限管理（`.env` 权限 600）。
 
 ---
 

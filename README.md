@@ -13,22 +13,25 @@ An enhanced proxy service that converts the official [Poe](https://poe.com) API 
 ## ✨ Key Features
 
 - **Full Tool / Function Calling Support**:
-  - **Native Protocol (`native`)**: Directly forwards tool schemas to Poe via `stream_request_base`, passing `tool_calls` and `role: tool` messages as protocol-level fields. Completes full multi-turn agent loops.
-  - **Prompt Emulation (`emulate`)**: Automatically injects tool schemas into system prompts and parses model JSON outputs into standard OpenAI `tool_calls`. Enables tool use for models where Poe doesn't natively expose function calling (e.g., `gemini-3.7-flash`).
-  - **Automatic Fallback (`auto`, Default)**: Tries native protocol first; if rejected with unsupported tool errors, automatically falls back to emulation mode with in-process caching.
-- **Robust Timeout & Error Handling**:
-  - **Streaming Timeout Protection**: `POE_STREAM_TIMEOUT` (default: 120s) and `POE_FIRST_EVENT_TIMEOUT` (default: 30s) prevent silent hangs when upstream bots fail to respond.
+  - **Native Protocol (`native`)**: Directly forwards tool schemas to Poe via `stream_request_base`, passing `tool_calls` and `role: tool` messages as protocol-level fields. Resolves lost `tool_call_id` and stringified `content=None`, ensuring seamless multi-turn Agent loops.
+  - **Prompt Emulation v2 (`emulate`)**: For bots without native tool protocol on Poe (such as `gemini-3.7-flash`), adopts a robust **Heredoc delimiter format** that avoids JSON string quote/newline escaping breakage. Filters out `<think>` tags and Poe Markdown thinking blocks (`*Thinking...*` + `>`), with automatic announce-only intent compensation.
+  - **Automatic Fallback (`auto`, Default)**: Tries native protocol first; if rejected with unsupported tool errors, automatically falls back to emulation mode with in-process caching (single probe per bot).
+- **Robust Timeout & Transient Fault Recovery**:
+  - **Dual Streaming Timeout Protection**: `POE_FIRST_EVENT_TIMEOUT` (default: 30s) prevents silent hanging on initial tokens; `POE_STREAM_TIMEOUT` (default: 120s) enforces total response duration.
+  - **Transient Fault Retry**: `POE_RETRY_COUNT` (default: 2) recovers from upstream temporary `BotError`, empty stream responses, or pure thinking blocks without actions.
   - **SSE Keepalive**: Sends `: keepalive` heartbeats every 15s to keep connections alive during emulation buffering.
-  - **Clear Error Propagation**: Translates upstream Poe errors (e.g. `BotError`) directly into informative messages for clients.
-- **Enterprise Security & Reliability**:
+  - **Clear Error Propagation**: Translates upstream Poe errors directly into informative messages for clients.
+- **Enterprise Security & Hardening**:
   - **Mandatory Bearer Authentication**: Constant-time token verification (`secrets.compare_digest`) via `CUSTOM_TOKEN` protecting all `/v1/` routes.
   - **Sanitized Logging**: Minimal log footprint by default (WARNING level); no credential leaks. Optional diagnostic tracing (`POE_DEBUG_LOG=1`).
+  - **CORS Hardening**: Strict origin control via `ALLOWED_ORIGINS` without wildcards.
   - **Connection Pooling**: Uses FastAPI lifespan-managed singleton `httpx.AsyncClient` avoiding connection leaks.
-- **Modernized Model Support**:
+- **Modernized Model Support & Image Generation**:
   - Validated lowercase model mappings matching current Poe bots (`gpt-5.4`, `claude-sonnet-4.6`, `claude-opus-4.8`, `gemini-3.5-flash`, etc.).
-  - Up-to-date image generation models (`gpt-image-2`, `flux-2-dev`, `flux-2-pro`, `nano-banana-2`, `seedream-5.0-pro`).
+  - Up-to-date image generation models (`gpt-image-2`, `flux-2-dev`, `flux-2-pro`, `nano-banana-2`, `seedream-5.0-pro`), with automatic aspect ratio calculation.
+  - Full catalog of 341 available bots and compute pricing available in [MODELS.md](MODELS.md).
 - **Production-Ready Deployment**:
-  - Dedicated macOS / Linux management scripts (`configure.sh`, `start.sh`) with dependency caching and port health check.
+  - Dedicated macOS / Linux management scripts (`configure.sh`, `start.sh`) with dependency caching, port health check, and strict permission enforcement (`.env` 600).
 
 ---
 
