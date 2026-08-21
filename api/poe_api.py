@@ -387,17 +387,21 @@ def fold_tool_history(messages):
 
 
 _TOOL_FORMAT_REMINDER = (
-    "\n\n[System note: When you need to use a tool, output ONLY a ```json code block "
-    'with exactly this format: {"tool_calls": [{"name": "function_name", "arguments": '
-    "{...}}]}. Do not include any text before or after the json block.]"
+    "IMPORTANT: You have access to tools. When you need to use a tool, "
+    "your ENTIRE response must be ONLY a ```json code block with this format:\n"
+    '{"tool_calls": [{"name": "function_name", "arguments": {...}}]}\n'
+    "Do NOT include any other text — no explanation, no thinking, no markdown — "
+    "just the json block. If you do not need to use a tool, respond normally."
 )
 
 
 def inject_tools_prompt(messages, tools, tool_choice=None):
     """在消息列表中注入工具提示词（追加到已有 system 消息，或新建一条）。
-    同时在最后一条 user 消息末尾追加简短格式提醒，防止长对话中 system 消息被注意力窗口遗忘。"""
+    同时在对话末尾插入独立的 system 格式提醒，防止长对话中被淹没。"""
     prompt = build_tools_prompt(tools, tool_choice)
     messages = [dict(m) for m in messages if isinstance(m, dict)]
+
+    # 1. 注入完整工具 schema 到 system 消息
     for m in messages:
         if m.get("role") == "system":
             m["content"] = extract_text(m.get("content")) + "\n" + prompt
@@ -405,10 +409,11 @@ def inject_tools_prompt(messages, tools, tool_choice=None):
     else:
         messages.insert(0, {"role": "system", "content": prompt})
 
-    # 在最后一条 user 消息末尾追加简短格式提醒，确保长对话中模型始终记得输出格式
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            m["content"] = extract_text(m.get("content")) + _TOOL_FORMAT_REMINDER
+    # 2. 在最后一条 user 消息之前插入独立的 system 格式提醒
+    #    保证长对话中模型一定能在最近上下文看到格式要求
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            messages.insert(i, {"role": "system", "content": _TOOL_FORMAT_REMINDER.strip()})
             break
 
     return messages
