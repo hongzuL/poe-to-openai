@@ -569,10 +569,11 @@ def merge_tool_delta(aggregated, delta):
 
 
 def _is_transient_error(exception):
-    """判断是否是可重试的瞬态错误（BotError 等 Poe 后端偶发故障）。"""
+    """判断是否是可重试的瞬态错误（BotError、空响应等 Poe 后端偶发故障）。"""
     msg = str(exception).lower()
     return any(kw in msg for kw in ("error communicating with bot", "internal server error",
-                                      "service unavailable", "rate limit", "timeout"))
+                                      "service unavailable", "rate limit", "timeout",
+                                      "empty response"))
 
 
 def _get_retry_count():
@@ -673,6 +674,13 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
         _dlog("native_stream 异常: bot=%s events=%d 已收文本=%d字符 error=%r",
               bot_name, event_count, text_len, e)
         raise
+
+    if event_count == 0:
+        raise RuntimeError(
+            f"Poe returned empty response for bot {bot_name} "
+            f"(0 events, messages={len(poe_messages)}, tools={len(poe_tools or [])})"
+        )
+
     _dlog("native_stream 结束: bot=%s events=%d 文本=%d字符", bot_name, event_count, text_len)
 
 
