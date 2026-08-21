@@ -1,47 +1,92 @@
 import sys, json
 sys.path.insert(0, '.')
-from api.poe_api import parse_tool_calls_from_text, _balance_json, _repair_json
+from api.poe_api import (parse_tool_calls_from_text, strip_tool_json_block,
+                         _parse_tool_calls_v2, _format_tool_call_v2, fold_tool_history)
 
-# 真实失败结构：少一个 ] 闭合 tool_calls 数组
-# 对应日志尾部：...\"}}}\n```  （应为 "}}]})
-inner_plan = "# 方案\\n\\n1. 第一步\\n2. 第二步"
-broken = ('```json\n{"tool_calls": [{"name": "ExitPlanMode", "arguments": '
-          '{"allowedPrompts": [{"prompt": "Generate docs", "tool": "Bash"}], "plan": "'
-          + inner_plan + '"}}}\n```')
+# ============ v2 格式解析 ============
 
-print("--- 样本尾部 ---")
-print(repr(broken[-60:]))
+# 用用户贴出的真实失败内容：含原始换行、未转义引号、f-string、中文
+evil_code = '''import json
+import os
+from collections import defaultdict
 
-calls = parse_tool_calls_from_text(broken)
-if not calls:
-    # 调试：看看 fence 正则抓到了什么
-    from api.poe_api import _JSON_FENCE_RE, _strip_thinking
-    cands = _JSON_FENCE_RE.findall(_strip_thinking(broken))
-    print("fence candidates:", [c[-50:] for c in cands])
-    for c in cands:
-        print("repair result:", _repair_json(c))
-    raise SystemExit("FAIL: 未解析")
+def format_tokens(num):
+    if num is None:
+        return "-"
+    if num >= 1_000_000:
+        return f"{num / 1_000_000:.1f}M".replace(".0M", "M")
+    print(f"Total models loaded: {len(models)}")
+    lines.append("# Poe 可用模型与定价一览表 (Poe Models & Pricing Catalog)\\n")
+'''
 
-assert calls[0]['function']['name'] == 'ExitPlanMode', calls
+v2_text = '''<<<tool_call>>>
+name: Write
+arg:file_path: /Users/test/generate_models_doc.py
+arg:content: <<<
+''' + evil_code + '''
+>>>
+<<<end>>>'''
+
+calls = parse_tool_calls_from_text(v2_text)
+assert calls and len(calls) == 1, f'FAIL: {calls}'
+assert calls[0]['function']['name'] == 'Write'
 args = json.loads(calls[0]['function']['arguments'])
-assert args['allowedPrompts'][0]['tool'] == 'Bash'
-assert '第一步' in args['plan']
-print('PASS: 缺失 ] 的 JSON 配平修复成功')
+assert args['file_path'] == '/Users/test/generate_models_doc.py'
+assert 'import json' in args['content']
+assert 'f"{num / 1_000_000:.1f}M"' in args['content']  # 引号原样保留
+assert 'Poe 可用模型与定价一览表' in args['content']  # 中文原样保留
+print('PASS: v2 heredoc 完美解析含原始换行+未转义引号+中文的代码')
 
-# 截断在字符串中途
-truncated = '{"tool_calls": [{"name": "read_file", "arguments": {"path": "models.j'
-calls2 = parse_tool_calls_from_text(truncated)
-assert calls2 and calls2[0]['function']['name'] == 'read_file', calls2
-print('PASS: 字符串中途截断的 JSON 补全成功')
+# 多个工具调用
+multi = '''<<<tool_call>>>
+name: Read
+arg:file_path: a.txt
+<<<end>>>
+<<<tool_call>>>
+name: Bash
+arg:command: <<<
+echo "hello" && ls -la
+>>>
+arg:timeout: 30
+<<<end>>>'''
+calls = parse_tool_calls_from_text(multi)
+assert len(calls) == 2
+assert calls[0]['function']['name'] == 'Read'
+assert json.loads(calls[1]['function']['arguments'])['command'] == 'echo "hello" && ls -la'
+assert json.loads(calls[1]['function']['arguments'])['timeout'] == 30  # 数字类型转换
+print('PASS: 多工具调用 + 类型转换')
 
-# 多层缺失闭合
-deep = '{"tool_calls": [{"name": "f", "arguments": {"a": {"b": [1, 2'
-r3 = _repair_json(deep)
-assert r3['tool_calls'][0]['arguments']['a']['b'] == [1, 2]
-print('PASS: 多层缺失闭合补全成功')
+# thinking 前缀 + v2 块
+with_thinking = '*Thinking...*\n\n> **Planning**\n> \n> I should write the file.\n> \n\n\n' + v2_text
+calls = parse_tool_calls_from_text(with_thinking)
+assert calls and calls[0]['function']['name'] == 'Write'
+print('PASS: thinking 前缀 + v2 块')
 
-# 合法 JSON 不受影响
-good = '{"tool_calls": [{"name": "f", "arguments": {"x": 1}}]}'
-assert _repair_json(good)['tool_calls'][0]['name'] == 'f'
-print('PASS: 合法 JSON 不受影响')
+# 剩余文本剥离
+rest = strip_tool_json_block(with_thinking)
+assert '<<<' not in rest and 'tool_call' not in rest, repr(rest[:100])
+print('PASS: v2 块从正文剥离')
+
+# ============ JSON 兼容回退 ============
+legacy = '```json\n{"tool_calls": [{"name": "Read", "arguments": {"file_path": "a.txt"}}]}\n```'
+calls = parse_tool_calls_from_text(legacy)
+assert calls and calls[0]['function']['name'] == 'Read'
+print('PASS: 旧 JSON 格式兼容')
+
+# ============ 历史折叠为 v2 格式 ============
+hist = [
+    {'role': 'user', 'content': '写个脚本'},
+    {'role': 'assistant', 'content': '', 'tool_calls': [
+        {'id': 'c1', 'type': 'function', 'function': {'name': 'Write', 'arguments': json.dumps({'file_path': 'x.py', 'content': 'print("hi")\nprint("bye")'})}}
+    ]},
+    {'role': 'tool', 'tool_call_id': 'c1', 'name': 'Write', 'content': 'ok'},
+]
+folded = fold_tool_history(hist)
+assert '<<<tool_call>>>' in folded[1]['content']
+assert 'print("hi")' in folded[1]['content']  # 引号不转义
+assert '\\"' not in folded[1]['content']
+print('PASS: 历史折叠为 v2 格式')
+print()
+print(folded[1]['content'])
+print()
 print('ALL PASS')

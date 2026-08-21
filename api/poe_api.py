@@ -307,19 +307,28 @@ You have access to the following functions:
 
 {schemas}
 
-When you need to call one or more functions, your ENTIRE reply must be a single
-json code block in EXACTLY this format, with no other text before or after it:
+When you need to call one or more functions, output each call in EXACTLY this
+delimiter-based format (NO json, NO escaping rules):
 
-```json
-{{"tool_calls": [{{"name": "<function_name>", "arguments": {{"<arg>": "<value>"}}}}]}}
-```
+<<<tool_call>>>
+name: <function_name>
+arg:<arg_name>: <single-line value>
+arg:<arg_name>: <<<
+<multi-line value: code, file content, commands — written raw, exactly as-is>
+>>>
+<<<end>>>
 
 Rules:
-- "arguments" must be a JSON object matching the function's parameters schema.
+- Short single-line values: write them directly as "arg:<name>: <value>".
+- Any value containing newlines, quotes, or code MUST use the heredoc form:
+  the line "arg:<name>: <<<", then the raw content on the following lines,
+  then a line containing only ">>>".
+- Inside heredoc blocks write content EXACTLY as-is: NEVER escape quotes,
+  NEVER add backslashes, NEVER convert newlines to \\n.
+- You may output several <<<tool_call>>> blocks in one reply.
 - Call a function ONLY when it helps answer the user's request; otherwise reply
-  normally in plain text, WITHOUT any json block.
-- Do not wrap the json block in any explanation. Do not invent functions that
-  are not listed above.{extra}"""
+  normally in plain text, WITHOUT any tool_call block.
+- Do not invent functions that are not listed above.{extra}"""
 
 _TOOLS_PROMPT_REQUIRED = "\n- In this conversation you MUST call at least one function."
 _TOOLS_PROMPT_FORCED = "\n- In this conversation you MUST call the function \"{name}\"."
@@ -341,10 +350,27 @@ def build_tools_prompt(tools, tool_choice=None):
     return _TOOLS_PROMPT_TEMPLATE.format(schemas=schemas, extra=extra)
 
 
+def _format_tool_call_v2(name, arguments):
+    """把工具调用渲染为 heredoc 仿真格式（对代码/多行内容零转义要求）。"""
+    lines = ["<<<tool_call>>>", f"name: {name}"]
+    if isinstance(arguments, dict):
+        for key, value in arguments.items():
+            if isinstance(value, str) and "\n" in value:
+                lines.append(f"arg:{key}: <<<")
+                lines.append(value)
+                lines.append(">>>")
+            else:
+                if not isinstance(value, str):
+                    value = json.dumps(value, ensure_ascii=False)
+                lines.append(f"arg:{key}: {value}")
+    lines.append("<<<end>>>")
+    return "\n".join(lines)
+
+
 def fold_tool_history(messages):
     """
     仿真模式下折叠工具历史：
-    - assistant 的 tool_calls 序列化为约定格式的 json 代码块（与提示词约定一致）
+    - assistant 的 tool_calls 序列化为 heredoc 仿真格式（与提示词约定一致）
     - role="tool" 的工具结果包装成 user 文本消息
     """
     folded = []
@@ -357,7 +383,7 @@ def fold_tool_history(messages):
             # 剥离历史消息中的思考块，避免模型模仿历史 thinking 风格而不再调用工具
             # （gemini 系模型看到历史中的 thinking 文本会陷入"只思考不行动"的循环）
             text = _strip_thinking(extract_text(message.get("content")))
-            calls = []
+            blocks = []
             for call in message.get("tool_calls") or []:
                 function = call.get("function") or {}
                 arguments = function.get("arguments", {})
@@ -366,11 +392,9 @@ def fold_tool_history(messages):
                         arguments = json.loads(arguments)
                     except json.JSONDecodeError:
                         pass
-                calls.append({"name": function.get("name", ""), "arguments": arguments})
-            if calls:
-                block = "```json\n" + json.dumps(
-                    {"tool_calls": calls}, ensure_ascii=False
-                ) + "\n```"
+                blocks.append(_format_tool_call_v2(function.get("name", ""), arguments))
+            if blocks:
+                block = "\n".join(blocks)
                 text = (text + "\n\n" + block).strip() if text else block
             if text:
                 folded.append({"role": "assistant", "content": text})
@@ -390,10 +414,12 @@ def fold_tool_history(messages):
 
 _TOOL_FORMAT_REMINDER = (
     "IMPORTANT: You have access to tools. When you need to use a tool, "
-    "your ENTIRE response must be ONLY a ```json code block with this format:\n"
-    '{"tool_calls": [{"name": "function_name", "arguments": {...}}]}\n'
-    "Do NOT include any other text — no explanation, no thinking, no markdown — "
-    "just the json block. If you do not need to use a tool, respond normally."
+    "output ONLY tool_call blocks in this exact format:\n"
+    "<<<tool_call>>>\nname: <function_name>\narg:<arg_name>: <<<\n<raw value, "
+    "no escaping, no quotes transformation>\n>>>\n<<<end>>>\n"
+    "Multi-line/code values MUST use the heredoc form. "
+    "Do NOT include any other text — no explanation, no thinking, no markdown. "
+    "If you do not need to use a tool, respond normally."
 )
 
 
@@ -546,16 +572,99 @@ def _try_parse_json(text):
     return None
 
 
+# ---------- heredoc（v2）仿真格式解析：对引号/换行零转义要求 ----------
+
+_TOOL_CALL_V2_RE = re.compile(r"<<<tool_call>>>\s*\n(.*?)(?:<<<end>>>|<<<tool_call>>>|\Z)", re.DOTALL)
+_ARG_LINE_RE = re.compile(r"arg:([\w.\-]+):\s*(.*)$")
+
+
+def _coerce_scalar(value):
+    """单行参数值：尝试转成数字/布尔/null，失败则保持原字符串。"""
+    v = value.strip()
+    if not v:
+        return ""
+    try:
+        return json.loads(v)
+    except (json.JSONDecodeError, ValueError):
+        return value
+
+
+def _parse_tool_calls_v2(text):
+    """
+    解析 heredoc 仿真格式的工具调用块：
+      <<<tool_call>>>
+      name: <函数名>
+      arg:<参数名>: <单行值>
+      arg:<参数名>: <<<
+      <多行原始内容>
+      >>>
+      <<<end>>>
+    该格式不含任何转义规则，模型不可能在引号/换行上犯错。
+    成功返回 [{"name": str, "arguments": dict}]，无工具调用返回 None。
+    """
+    results = []
+    for block in _TOOL_CALL_V2_RE.finditer(text):
+        lines = block.group(1).split("\n")
+        name = None
+        args = {}
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            if line.startswith("name:") and name is None:
+                name = line[5:].strip()
+                i += 1
+                continue
+            m = _ARG_LINE_RE.match(line)
+            if m and name is not None:
+                key, value = m.group(1), m.group(2)
+                if value.strip() == "<<<":
+                    # heredoc：收集到只含 >>> 的行为止
+                    buf = []
+                    i += 1
+                    while i < len(lines) and lines[i].strip() != ">>>":
+                        buf.append(lines[i])
+                        i += 1
+                    if i < len(lines):
+                        i += 1  # 跳过 >>> 行；i 已指向下一行，直接 continue
+                    args[key] = "\n".join(buf)
+                    continue
+                args[key] = _coerce_scalar(value)
+                i += 1
+                continue
+            i += 1
+        if name:
+            results.append({"name": name, "arguments": args})
+    return results or None
+
+
 def parse_tool_calls_from_text(text):
     """
     从模型纯文本输出中解析工具调用。
+    优先解析 heredoc（v2）格式；兼容旧的 json 代码块格式（含修复管线）。
     成功返回 OpenAI delta 格式的 tool_calls 列表；没有工具调用返回 None。
-    能容忍 <think> 思考块、json 代码块、以及夹杂在正文里的裸 JSON。
     """
     if not text:
         return None
 
     cleaned = _strip_thinking(text)
+
+    # 1. 优先：heredoc v2 格式（对引号/换行免疫）
+    v2_calls = _parse_tool_calls_v2(cleaned)
+    if v2_calls:
+        result = []
+        for i, call in enumerate(v2_calls):
+            result.append({
+                "index": i,
+                "id": f"call_{i}",
+                "type": "function",
+                "function": {
+                    "name": call["name"],
+                    "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+                },
+            })
+        return result
+
+    # 2. 兼容：json 代码块 + 裸 JSON 兜底（含修复管线）
     candidates = _JSON_FENCE_RE.findall(cleaned)
 
     # 裸 JSON 兜底：用 raw_decode 扫描每个 "{" 起始的对象；失败时尝试配平修复
@@ -606,11 +715,15 @@ def parse_tool_calls_from_text(text):
     return None
 
 
+_V2_BLOCK_RE = re.compile(r"<<<tool_call>>>.*?<<<end>>>", re.DOTALL)
+
+
 def strip_tool_json_block(text):
-    """解析出工具调用后，把 json 代码块和思考块从正文中剔除，返回剩余文本。"""
+    """解析出工具调用后，把 v2 工具块/json 代码块/思考块从正文中剔除，返回剩余文本。"""
     if not text:
         return ""
     cleaned = _strip_thinking(text)
+    cleaned = _V2_BLOCK_RE.sub("", cleaned)
     cleaned = _JSON_FENCE_RE.sub("", cleaned)
     return cleaned.strip()
 
