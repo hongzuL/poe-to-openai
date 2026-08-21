@@ -8,7 +8,7 @@
 
 **核心亮点**：支持完整的 Agent 工具调用（Tool Use / Function Calling）、Prompt 仿真降级模式、流式超时防卡死机制、强制接口鉴权与轻量化运维管理。
 
-[English Documentation (README.md)](README.md) | [部署说明 (部署说明.md)](部署说明.md) | [改造总结 (改动总结.md)](改动总结.md)
+[English Documentation (README.md)](README.md) | [模型列表与定价 (MODELS.md)](MODELS.md) | [部署说明 (部署说明.md)](部署说明.md) | [改造总结 (改动总结.md)](改动总结.md)
 
 ---
 

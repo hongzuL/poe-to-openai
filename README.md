@@ -6,7 +6,7 @@
 
 An enhanced proxy service that converts the official [Poe](https://poe.com) API to OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/models`, `/v1/images/generations`).
 
-[中文说明 (README_ZH.md)](README_ZH.md) | [部署说明 (部署说明.md)](部署说明.md) | [改造总结 (改动总结.md)](改动总结.md)
+[中文说明 (README_ZH.md)](README_ZH.md) | [模型列表与定价 (MODELS.md)](MODELS.md) | [部署说明 (部署说明.md)](部署说明.md) | [改造总结 (改动总结.md)](改动总结.md)
 
 ---
 
