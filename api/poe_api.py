@@ -354,7 +354,9 @@ def fold_tool_history(messages):
         role = message.get("role")
 
         if role == "assistant":
-            text = extract_text(message.get("content"))
+            # 剥离历史消息中的思考块，避免模型模仿历史 thinking 风格而不再调用工具
+            # （gemini 系模型看到历史中的 thinking 文本会陷入"只思考不行动"的循环）
+            text = _strip_thinking(extract_text(message.get("content")))
             calls = []
             for call in message.get("tool_calls") or []:
                 function = call.get("function") or {}
@@ -421,6 +423,20 @@ def inject_tools_prompt(messages, tools, tool_choice=None):
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+# Poe 上 gemini 系模型的思考块格式：*Thinking...* 后跟一串 "> " 引用行
+_POE_THINK_RE = re.compile(
+    r"\*Thinking[^\n]*\*[ \t]*\n(?:[ \t]*\n)*(?:>[^\n]*\n?)+",
+    re.IGNORECASE,
+)
+
+
+def _strip_thinking(text):
+    """剥离模型输出中的思考块：<think>...</think> 标签和 Poe 风格的 *Thinking...* 引用块。"""
+    if not text:
+        return ""
+    cleaned = _THINK_RE.sub("", text)
+    cleaned = _POE_THINK_RE.sub("", cleaned)
+    return cleaned.strip()
 
 
 def _repair_json(text):
@@ -463,7 +479,7 @@ def parse_tool_calls_from_text(text):
     if not text:
         return None
 
-    cleaned = _THINK_RE.sub("", text)
+    cleaned = _strip_thinking(text)
     candidates = _JSON_FENCE_RE.findall(cleaned)
 
     # 裸 JSON 兜底：用 raw_decode 扫描每个 "{" 起始的对象
@@ -512,10 +528,10 @@ def parse_tool_calls_from_text(text):
 
 
 def strip_tool_json_block(text):
-    """解析出工具调用后，把 json 代码块从正文中剔除，返回剩余文本。"""
+    """解析出工具调用后，把 json 代码块和思考块从正文中剔除，返回剩余文本。"""
     if not text:
         return ""
-    cleaned = _THINK_RE.sub("", text)
+    cleaned = _strip_thinking(text)
     cleaned = _JSON_FENCE_RE.sub("", cleaned)
     return cleaned.strip()
 
@@ -582,11 +598,12 @@ def _is_transient_error(exception):
 
 
 def _get_retry_count():
-    """POE_RETRY_COUNT：瞬态错误时的重试次数（默认 1）。"""
+    """POE_RETRY_COUNT：瞬态错误时的重试次数（默认 2）。
+    仿真模式下 gemini 系模型有概率性"只思考不回答"故障，重试是最有效的缓解手段。"""
     try:
-        return max(0, min(3, int(os.environ.get("POE_RETRY_COUNT", "1"))))
+        return max(0, min(3, int(os.environ.get("POE_RETRY_COUNT", "2"))))
     except ValueError:
-        return 1
+        return 2
 
 
 def _get_emulate_bots():
@@ -723,8 +740,15 @@ async def _emulated_events(api_key, messages, model, tools, tool_choice,
         # 未解析到工具调用：记录原文长度和尾部预览（判断是否被 Poe 截断在 JSON 中途）
         _dlog("emulated: bot=%s 原文=%d字符，未解析到工具调用。尾部预览: %r",
               get_bot(model), len(full_text), full_text[-120:])
-        if full_text:
-            yield {"kind": "text", "text": full_text}
+        # 纯思考响应（剥离 thinking 后为空）：gemini 系模型的"只思考不回答"概率性故障，
+        # 作为瞬态错误抛出，由 query_stream 的重试循环重试
+        stripped = _strip_thinking(full_text)
+        if not stripped:
+            raise RuntimeError(
+                f"Poe returned empty response (thinking-only) for bot {get_bot(model)}"
+            )
+        # 合法文本回答：剥离 thinking 块后再返回给客户端，避免噪声混入答案
+        yield {"kind": "text", "text": stripped}
 
 
 # ---------- 对外统一入口 ----------
