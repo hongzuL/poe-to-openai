@@ -1,5 +1,7 @@
+import asyncio
 import json
 import logging
+import os
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -153,6 +155,13 @@ def stream_chunk(model, delta, finish_reason=None, usage=None, include_role=Fals
     }
 
 
+def keepalive_interval():
+    try:
+        return max(1, int(os.environ.get("POE_KEEPALIVE_SECONDS", "15")))
+    except ValueError:
+        return 15
+
+
 async def openai_event_stream(model, messages, api_key, tools, tool_choice,
                               temperature, stop_sequences, session):
     req_id = utils.get_8_random_str()
@@ -163,9 +172,38 @@ async def openai_event_stream(model, messages, api_key, tools, tool_choice,
     poe_api._dlog("流式开始 %s: model=%s messages=%d tools=%d",
                   req_id, model, len(messages), len(tools or []))
 
+    # 上游事件放进队列，主循环按 keepalive_interval 轮询：
+    # 仿真模式需要攒完整段上游回复，期间长时间无输出，用 SSE 注释行（: keepalive）
+    # 保活，防止客户端因读超时而断开。
+    queue = asyncio.Queue()
+
+    async def produce():
+        try:
+            async for event in poe_api.query_stream(api_key, messages, model, tools, tool_choice,
+                                                    temperature, stop_sequences, session):
+                await queue.put(("event", event))
+        except Exception as e:
+            await queue.put(("error", e))
+        else:
+            await queue.put(("done", None))
+
+    producer = asyncio.create_task(produce())
+    upstream_error = None
     try:
-        async for event in poe_api.query_stream(api_key, messages, model, tools, tool_choice,
-                                                temperature, stop_sequences, session):
+        while True:
+            try:
+                kind, payload = await asyncio.wait_for(queue.get(), timeout=keepalive_interval())
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+                continue
+
+            if kind == "done":
+                break
+            if kind == "error":
+                upstream_error = payload
+                break
+
+            event = payload
             if event["kind"] == "text":
                 text_chunks.append(event["text"])
                 chunk = stream_chunk(model, {"content": event["text"]}, include_role=first_chunk)
@@ -181,11 +219,31 @@ async def openai_event_stream(model, messages, api_key, tools, tool_choice,
             elif event["kind"] == "replace":
                 # 已发送的 chunk 无法撤回，只能停止累计 usage 的旧文本
                 text_chunks.clear()
-    except Exception as e:
-        logger.error("Poe 上游请求失败: %s: %s", type(e).__name__, e)
+    finally:
+        if not producer.done():
+            producer.cancel()
+            try:
+                await producer
+            except Exception:
+                pass
+
+    if upstream_error is not None:
+        logger.error("Poe 上游请求失败: %s: %s", type(upstream_error).__name__, upstream_error)
         poe_api._dlog("流式异常 %s: model=%s 已发chunks=%d 已发文本=%d字符 error=%r",
-                      req_id, model, n_chunks, sum(len(t) for t in text_chunks), e)
-        yield f"data: {json.dumps(stream_chunk(model, {}, finish_reason='stop'), ensure_ascii=False)}\n\n"
+                      req_id, model, n_chunks, sum(len(t) for t in text_chunks), upstream_error)
+
+        # 超时或首次请求失败：给客户端一个明确的错误信息
+        if n_chunks == 0:
+            if isinstance(upstream_error, asyncio.TimeoutError):
+                error_content = f"Poe upstream timeout: {upstream_error}"
+            else:
+                error_content = f"Poe upstream error ({type(upstream_error).__name__}): {upstream_error}"
+            chunk = stream_chunk(model, {"content": error_content}, finish_reason="stop",
+                                 include_role=True)
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        else:
+            # 已经给客户端发过内容，发送一个空的 finish chunk
+            yield f"data: {json.dumps(stream_chunk(model, {}, finish_reason='stop'), ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
         return
 

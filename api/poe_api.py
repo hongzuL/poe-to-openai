@@ -20,10 +20,12 @@ Poe 协议层：OpenAI 格式与 Poe 官方 API（fastapi_poe SDK）之间的转
   仿真，并在进程内缓存结论（每个 bot 只探测一次）。
 """
 
+import asyncio
 import json
 import logging
 import os
 import re
+import time
 
 import httpx
 from fastapi_poe import (
@@ -46,6 +48,22 @@ DEFAULT_BOT = "gpt-4o"
 _NATIVE_TOOLS_UNSUPPORTED = {}
 
 
+def _get_stream_timeout():
+    """POE_STREAM_TIMEOUT：整个 Poe 流的超时秒数（默认 120）。"""
+    try:
+        return max(10, int(os.environ.get("POE_STREAM_TIMEOUT", "120")))
+    except ValueError:
+        return 120
+
+
+def _get_first_event_timeout():
+    """POE_FIRST_EVENT_TIMEOUT：首个事件的超时秒数（默认 30）。"""
+    try:
+        return max(5, int(os.environ.get("POE_FIRST_EVENT_TIMEOUT", "30")))
+    except ValueError:
+        return 30
+
+
 # ---------- 诊断日志（POE_DEBUG_LOG=1 时启用，输出到 WARNING，前缀 DIAG） ----------
 
 def _debug_enabled():
@@ -56,6 +74,39 @@ def _dlog(msg, *args):
     """诊断日志。仅在 POE_DEBUG_LOG 开启时输出；可能包含内容片段，仅用于临时排障。"""
     if _debug_enabled():
         logger.warning("DIAG " + msg, *args)
+
+
+# ---------- 流超时控制 ----------
+
+async def _stream_with_timeout(generator, first_timeout, total_timeout):
+    """
+    为异步生成器的每个 item 添加超时保护：
+    - first_timeout：首个 item 的超时（秒），防止 Poe 连接后无响应
+    - total_timeout：整个流的超时（秒），防止单次请求无限挂起
+    超时抛出 asyncio.TimeoutError。
+    """
+    start_time = time.monotonic()
+    agen = generator.__aiter__()
+    first = True
+
+    while True:
+        if first:
+            timeout = first_timeout
+            first = False
+        else:
+            elapsed = time.monotonic() - start_time
+            remaining = total_timeout - elapsed
+            if remaining <= 0:
+                raise asyncio.TimeoutError(
+                    f"Poe stream total timeout ({total_timeout}s) exceeded after {elapsed:.0f}s"
+                )
+            timeout = min(remaining, 30)  # 每个后续 chunk 最多等 30 秒
+
+        try:
+            item = await asyncio.wait_for(agen.__anext__(), timeout)
+            yield item
+        except StopAsyncIteration:
+            break
 
 
 # ---------- 模型映射 ----------
@@ -346,8 +397,39 @@ def inject_tools_prompt(messages, tools, tool_choice=None):
     return [{"role": "system", "content": prompt}] + messages
 
 
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*)\s*```", re.DOTALL)
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _repair_json(text):
+    """尝试修复常见的 JSON 格式问题（模型输出 JSON 时常犯的错误）。"""
+    # 1. 去除尾部逗号（如 {"a": 1,}）
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
+    # 2. 尝试标准 JSON 解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # 3. 尝试用 ast.literal_eval 解析 Python 字典格式
+    try:
+        import ast
+        obj = ast.literal_eval(text)
+        if isinstance(obj, dict):
+            return obj
+    except (ValueError, SyntaxError):
+        pass
+    return None
+
+
+def _try_parse_json(text):
+    """尝试解析 JSON，失败时返回 None。"""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        repaired = _repair_json(text)
+        if repaired is not None:
+            return repaired
+    return None
 
 
 def parse_tool_calls_from_text(text):
@@ -375,9 +457,8 @@ def parse_tool_calls_from_text(text):
             idx = cleaned.find("{", idx + 1)
 
     for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
+        parsed = _try_parse_json(candidate)
+        if parsed is None:
             continue
         calls = parsed.get("tool_calls") if isinstance(parsed, dict) else None
         if isinstance(parsed, list):
@@ -470,9 +551,26 @@ def merge_tool_delta(aggregated, delta):
         entry["function"]["arguments"] += function["arguments"]
 
 
-def _is_tool_rejection(exception):
-    """判断异常是否是 Poe 因 tools 参数拒绝请求。"""
-    return "tool" in str(exception).lower()
+def _is_transient_error(exception):
+    """判断是否是可重试的瞬态错误（BotError 等 Poe 后端偶发故障）。"""
+    msg = str(exception).lower()
+    return any(kw in msg for kw in ("error communicating with bot", "internal server error",
+                                      "service unavailable", "rate limit", "timeout"))
+
+
+def _get_retry_count():
+    """POE_RETRY_COUNT：瞬态错误时的重试次数（默认 1）。"""
+    try:
+        return max(0, min(3, int(os.environ.get("POE_RETRY_COUNT", "1"))))
+    except ValueError:
+        return 1
+
+
+def _get_emulate_bots():
+    """POE_EMULATE_BOTS：逗号分隔的 bot 名单，带 tools 请求时直接使用仿真模式，
+    跳过原生探测（省去每次进程重启后的两次失败调用和积分消耗）。"""
+    raw = os.environ.get("POE_EMULATE_BOTS", "")
+    return {b.strip() for b in raw.split(",") if b.strip()}
 
 
 # ---------- 底层查询流（原生协议） ----------
@@ -504,15 +602,20 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
 
     event_count = 0
     text_len = 0
+    stream_gen = stream_request_base(
+        request=query,
+        bot_name=bot_name,
+        api_key=api_key,
+        tools=poe_tools,
+        tool_calls=history_tool_calls,
+        tool_results=history_tool_results,
+        session=session,
+    )
     try:
-        async for message in stream_request_base(
-            request=query,
-            bot_name=bot_name,
-            api_key=api_key,
-            tools=poe_tools,
-            tool_calls=history_tool_calls,
-            tool_results=history_tool_results,
-            session=session,
+        async for message in _stream_with_timeout(
+            stream_gen,
+            _get_first_event_timeout(),
+            _get_stream_timeout(),
         ):
             event_count += 1
             data = getattr(message, "data", None)
@@ -545,6 +648,10 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
             if text:
                 text_len += len(text)
                 yield {"kind": "text", "text": text}
+    except asyncio.TimeoutError as e:
+        _dlog("native_stream 超时: bot=%s events=%d 已收文本=%d字符 timeout=%s",
+              bot_name, event_count, text_len, e)
+        raise
     except Exception as e:
         _dlog("native_stream 异常: bot=%s events=%d 已收文本=%d字符 error=%r",
               bot_name, event_count, text_len, e)
@@ -602,12 +709,13 @@ async def query_stream(api_key, messages, model, tools=None, tool_choice=None,
     """
     mode = os.environ.get("POE_TOOL_MODE", "auto").lower()
     bot = get_bot(model)
+    emulate_bots = _get_emulate_bots()
 
     use_emulation = False
     if tools and tool_choice != "none":
         if mode == "emulate":
             use_emulation = True
-        elif mode == "auto" and _NATIVE_TOOLS_UNSUPPORTED.get(bot):
+        elif mode == "auto" and (bot in emulate_bots or _NATIVE_TOOLS_UNSUPPORTED.get(bot)):
             use_emulation = True
 
     _dlog("query_stream: model=%s bot=%s POE_TOOL_MODE=%s tools=%d tool_choice=%s -> %s",
@@ -633,11 +741,22 @@ async def query_stream(api_key, messages, model, tools=None, tool_choice=None,
             use_emulation = True
 
     if use_emulation:
-        async for event in _emulated_events(
-            api_key, messages, model, tools, tool_choice,
-            temperature, stop_sequences, session,
-        ):
-            yield event
+        retries = _get_retry_count()
+        for attempt in range(retries + 1):
+            try:
+                async for event in _emulated_events(
+                    api_key, messages, model, tools, tool_choice,
+                    temperature, stop_sequences, session,
+                ):
+                    yield event
+                return
+            except Exception as e:
+                if attempt < retries and _is_transient_error(e):
+                    logger.warning("bot %s 仿真模式请求失败（%s），第 %d/%d 次重试",
+                                   bot, e, attempt + 1, retries)
+                    await asyncio.sleep(1.0 * (attempt + 1))
+                    continue
+                raise
         return
 
     async for event in _native_stream(
