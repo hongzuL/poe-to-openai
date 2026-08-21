@@ -386,15 +386,32 @@ def fold_tool_history(messages):
     return folded
 
 
+_TOOL_FORMAT_REMINDER = (
+    "\n\n[System note: When you need to use a tool, output ONLY a ```json code block "
+    'with exactly this format: {"tool_calls": [{"name": "function_name", "arguments": '
+    "{...}}]}. Do not include any text before or after the json block.]"
+)
+
+
 def inject_tools_prompt(messages, tools, tool_choice=None):
-    """在消息列表中注入工具提示词（追加到已有 system 消息，或新建一条）。"""
+    """在消息列表中注入工具提示词（追加到已有 system 消息，或新建一条）。
+    同时在最后一条 user 消息末尾追加简短格式提醒，防止长对话中 system 消息被注意力窗口遗忘。"""
     prompt = build_tools_prompt(tools, tool_choice)
     messages = [dict(m) for m in messages if isinstance(m, dict)]
     for m in messages:
         if m.get("role") == "system":
             m["content"] = extract_text(m.get("content")) + "\n" + prompt
-            return messages
-    return [{"role": "system", "content": prompt}] + messages
+            break
+    else:
+        messages.insert(0, {"role": "system", "content": prompt})
+
+    # 在最后一条 user 消息末尾追加简短格式提醒，确保长对话中模型始终记得输出格式
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            m["content"] = extract_text(m.get("content")) + _TOOL_FORMAT_REMINDER
+            break
+
+    return messages
 
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
