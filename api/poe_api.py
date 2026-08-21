@@ -439,11 +439,40 @@ def _strip_thinking(text):
     return cleaned.strip()
 
 
+def _escape_control_chars_in_strings(text):
+    """转义 JSON 字符串值内部的原始控制字符（\\n \\r \\t 等）。
+    模型经常在 arguments 里输出带原始换行的多行命令/代码，导致非法 JSON。
+    逐字符扫描，仅在双引号字符串内部转义，不影响字符串外的合法空白。"""
+    result = []
+    in_string = False
+    escaped = False
+    for ch in text:
+        if escaped:
+            result.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            result.append(ch)
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string and ch in "\n\r\t":
+            result.append({"\n": "\\n", "\r": "\\r", "\t": "\\t"}[ch])
+            continue
+        result.append(ch)
+    return "".join(result)
+
+
 def _repair_json(text):
     """尝试修复常见的 JSON 格式问题（模型输出 JSON 时常犯的错误）。"""
-    # 1. 去除尾部逗号（如 {"a": 1,}）
+    # 1. 转义字符串内的原始控制字符（多行命令/代码参数最常见）
+    text = _escape_control_chars_in_strings(text)
+    # 2. 去除尾部逗号（如 {"a": 1,}）
     text = re.sub(r",(\s*[}\]])", r"\1", text)
-    # 2. 尝试标准 JSON 解析
+    # 3. 尝试标准 JSON 解析
     try:
         return json.loads(text)
     except json.JSONDecodeError:
