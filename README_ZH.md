@@ -32,34 +32,52 @@
   - 收录 28 个经 Poe 官方实测的现役模型 ID（小写标准名称：`gpt-5.4`、`claude-sonnet-4.6`、`claude-opus-4.8`、`gemini-3.5-flash` 等）。
   - 完整支持最新生图模型（`gpt-image-2`、`flux-2-dev`、`flux-2-pro`、`nano-banana-2`、`seedream-5.0-pro`），自动按请求尺寸计算正确的宽高比。
   - 详细 341 款可用模型与计费参考请查阅 [MODELS.md (模型列表与定价)](MODELS.md)。
+- **跨平台支持与统一 Web UI 控制台 (Save the trouble 设计)**：
+  - **原生 Windows 支持**：提供双击即用的 `start.bat` 与跨平台通用管理脚本 `manager.py`，彻底告别 WSL / Bash 环境依赖。
+  - **内置现代化 Web UI 控制台**（访问 `http://localhost:39527/ui`）：自适应深色界面，支持多系统识别、一键启停/重启服务、在线编辑与保存 `.env` 配置、可视化模型映射表管理、Poe 连通性测试以及内置 Chat 对话调试控制台（Playground）。
+  - **零前端构建依赖**：纯轻量单页架构，无需 Node.js / Electron / PyQt，开箱即用。
 - **极简部署与运维**：
-  - 提供完善的 macOS / Linux 管理脚本（`configure.sh`、`start.sh`），内置端口占用检测、重复 API Key 检测、依赖增量安装与安全权限管理（`.env` 权限 600）。
+  - Windows: 双击 `start.bat` 或运行 `python manager.py`。
+  - macOS / Linux: 运行 `./start.sh ui`、`./start.sh start` 或 `python manager.py`。
 
 ---
 
 ## 🚀 快速开始
 
 ### 环境要求
-- macOS 或 Linux（**Python >= 3.10**）
+- Windows / macOS / Linux（**Python >= 3.10**）
 - Poe 订阅账号，从 [https://poe.com/api_key](https://poe.com/api_key) 获取 API key
 
-### 1. 安装与配置
+### 1. 统一 Web UI 控制台启动（推荐，全平台通用）
 
 ```bash
 # 克隆仓库
 git clone https://github.com/hongzuL/poe-to-openai.git
 cd poe-to-openai
 
-# 赋予脚本执行权限
-chmod +x configure.sh start.sh run.sh
+# Windows 用户：
+双击运行 start.bat （或者命令行运行 python manager.py）
 
-# 执行交互式配置（自动生成高强度令牌，设置 .env 权限为 600）
-./configure.sh
+# macOS / Linux 用户：
+./start.sh ui （或者命令行运行 python manager.py）
+```
+> 启动后会自动在默认浏览器打开 **Web UI 控制台 (`http://localhost:39527/ui`)**，您可以在界面上配置 Poe API Key、生成客户端 Token、编辑模型映射并一键测试与启停服务。
+
+### 2. 命令行服务管理 (CLI)
+
+#### 跨平台通用 (`manager.py`)
+```bash
+python manager.py start       # 后台启动服务
+python manager.py status      # 查看运行状态与 PID
+python manager.py restart     # 重启服务
+python manager.py stop        # 停止服务
+python manager.py log         # 实时跟踪日志
+python manager.py run         # 前台运行服务（调试用）
 ```
 
-### 2. 服务管理
-
+#### macOS / Linux 原生 Shell (`start.sh`)
 ```bash
+./start.sh ui          # 启动后台服务并打开 Web UI 控制台
 ./start.sh start       # 后台启动（日志写入 log/app.log）
 ./start.sh status      # 查看运行状态与 PID
 ./start.sh log         # 实时追踪日志

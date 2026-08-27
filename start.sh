@@ -1,6 +1,6 @@
 #!/bin/bash
 # poe-to-openai 服务管理脚本（macOS / Linux）
-# 用法: ./start.sh {start|stop|restart|status|log|foreground}
+# 用法: ./start.sh {ui|start|stop|restart|status|log|foreground}
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -231,7 +231,14 @@ do_foreground() {
     exec $(gunicorn_cmd)
 }
 
-case "${1:-}" in
+do_ui() {
+    ensure_python
+    install_deps
+    "$VENV_DIR/bin/python" manager.py ui
+}
+
+case "${1:-ui}" in
+    ui)         do_ui ;;
     start)      do_start ;;
     stop)       do_stop ;;
     restart)    do_stop; do_start ;;
@@ -239,7 +246,7 @@ case "${1:-}" in
     log|logs)   tail -f "$LOG_FILE" ;;
     foreground) do_foreground ;;
     *)
-        echo "用法: $0 {start|stop|restart|status|log|foreground}"
+        echo "用法: $0 {ui|start|stop|restart|status|log|foreground}"
         exit 1
         ;;
 esac

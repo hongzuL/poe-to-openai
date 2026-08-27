@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>poe-to-openai 控制台</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    [v-cloak] { display: none; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1f2937; }
+    ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #6b7280; }
+  </style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen antialiased flex flex-col font-sans">
+  <div id="app" v-cloak class="flex-1 flex flex-col max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 gap-6">
+
+    <!-- 顶部导航栏 -->
+    <header class="flex flex-wrap items-center justify-between gap-4 bg-slate-800/80 backdrop-blur border border-slate-700/60 rounded-2xl p-4 sm:px-6 shadow-xl">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-indigo-500/30">
+          <i class="fa-solid fa-bolt"></i>
+        </div>
+        <div>
+          <h1 class="text-lg sm:text-xl font-bold bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
+            poe-to-openai
+          </h1>
+          <p class="text-xs text-slate-400">跨平台 OpenAI 兼容网关控制中心</p>
+        </div>
+      </div>
+
+      <!-- 系统与状态卡片 -->
+      <div class="flex items-center gap-3 flex-wrap">
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/60 border border-slate-700/60 text-xs">
+          <i :class="osIcon" class="text-indigo-400"></i>
+          <span>{{ status.platform_details?.system || '检测中' }}</span>
+          <span class="text-slate-500">|</span>
+          <span class="text-slate-400">Py {{ status.platform_details?.python || '-' }}</span>
+        </div>
+
+        <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
+             :class="status.running ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-400' : 'bg-rose-950/40 border-rose-700/50 text-rose-400'">
+          <span class="relative flex h-2 w-2">
+            <span v-if="status.running" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2" :class="status.running ? 'bg-emerald-500' : 'bg-rose-500'"></span>
+          </span>
+          {{ status.running ? `运行中 (PID ${status.pid})` : '已停止' }}
+        </div>
+
+        <!-- 启停操作按钮 -->
+        <div class="flex items-center gap-2">
+          <button v-if="!status.running" @click="startServer" :disabled="loading.server"
+                  class="flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-emerald-600/30 transition disabled:opacity-50">
+            <i class="fa-solid fa-play"></i>
+            <span>{{ loading.server ? '启动中...' : '启动服务' }}</span>
+          </button>
+          <button v-if="status.running" @click="restartServer" :disabled="loading.server"
+                  class="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-amber-600/30 transition disabled:opacity-50">
+            <i class="fa-solid fa-rotate-right" :class="{'animate-spin': loading.server}"></i>
+            <span>重启</span>
+          </button>
+          <button v-if="status.running" @click="stopServer" :disabled="loading.server"
+                  class="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-rose-600/30 transition disabled:opacity-50">
+            <i class="fa-solid fa-stop"></i>
+            <span>停止</span>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- 主体内容选项卡 -->
+    <main class="flex-1 flex flex-col gap-6">
+      <div class="flex border-b border-slate-700/80 gap-2 sm:gap-6 overflow-x-auto text-sm font-medium">
+        <button @click="activeTab = 'config'"
+                :class="activeTab === 'config' ? 'text-indigo-400 border-indigo-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+                class="py-3 px-2 border-b-2 flex items-center gap-2 whitespace-nowrap transition">
+          <i class="fa-solid fa-sliders"></i>
+          配置参数 (.env)
+        </button>
+        <button @click="activeTab = 'mapping'"
+                :class="activeTab === 'mapping' ? 'text-indigo-400 border-indigo-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+                class="py-3 px-2 border-b-2 flex items-center gap-2 whitespace-nowrap transition">
+          <i class="fa-solid fa-diagram-project"></i>
+          模型映射表
+        </button>
+        <button @click="activeTab = 'playground'"
+                :class="activeTab === 'playground' ? 'text-indigo-400 border-indigo-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+                class="py-3 px-2 border-b-2 flex items-center gap-2 whitespace-nowrap transition">
+          <i class="fa-solid fa-flask"></i>
+          API 测试与连通性
+        </button>
+        <button @click="activeTab = 'logs'; fetchLogs();"
+                :class="activeTab === 'logs' ? 'text-indigo-400 border-indigo-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+                class="py-3 px-2 border-b-2 flex items-center gap-2 whitespace-nowrap transition">
+          <i class="fa-solid fa-terminal"></i>
+          实时日志
+        </button>
+      </div>
+
+      <!-- Tab 1: 核心配置参数 -->
+      <div v-show="activeTab === 'config'" class="space-y-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <!-- 凭据安全配置 -->
+          <div class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 space-y-4">
+            <div class="flex items-center gap-2 text-indigo-400 font-semibold text-base border-b border-slate-700/60 pb-3">
+              <i class="fa-solid fa-key"></i>
+              <span>认证与安全凭据</span>
+            </div>
+
+            <!-- Poe API Key -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">
+                Poe API Key (SYSTEM_TOKEN) <span class="text-rose-400">*</span>
+              </label>
+              <div class="relative">
+                <input :type="showSystemToken ? 'text' : 'password'"
+                       v-model="form.SYSTEM_TOKEN"
+                       :placeholder="config.has_system_token ? '已配置 (' + config.system_token_preview + ')，留空保持不变' : '请输入从 poe.com/api_key 获取的 Key'"
+                       class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition pr-10">
+                <button type="button" @click="showSystemToken = !showSystemToken" class="absolute right-3 top-3 text-slate-400 hover:text-slate-200 text-xs">
+                  <i :class="showSystemToken ? 'fa-regular fa-eye-slash' : 'fa-regular fa-eye'"></i>
+                </button>
+              </div>
+              <p class="text-xs text-slate-500 mt-1">从 <a href="https://poe.com/api_key" target="_blank" class="text-indigo-400 hover:underline">poe.com/api_key</a> 获取，自动过滤误重粘</p>
+            </div>
+
+            <!-- CUSTOM_TOKEN -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">
+                客户端访问令牌 (CUSTOM_TOKEN) <span class="text-rose-400">*</span>
+              </label>
+              <div class="flex gap-2">
+                <input type="text" v-model="form.CUSTOM_TOKEN" placeholder="sk-..."
+                       class="flex-1 bg-slate-900/80 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white font-mono focus:outline-none focus:border-indigo-500 transition">
+                <button type="button" @click="generateNewToken" title="生成强随机 Token"
+                        class="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-medium transition flex items-center gap-1">
+                  <i class="fa-solid fa-arrows-rotate"></i>
+                  <span>生成</span>
+                </button>
+                <button type="button" @click="copyToClipboard(form.CUSTOM_TOKEN)" title="复制 Token"
+                        class="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-xl text-xs font-medium transition">
+                  <i class="fa-regular fa-copy"></i>
+                </button>
+              </div>
+              <p class="text-xs text-slate-500 mt-1">第三方应用（如 NextChat, TypingMind, 沉浸式翻译等）调用时填写的 API Key</p>
+            </div>
+          </div>
+
+          <!-- 网络与监听设置 -->
+          <div class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 space-y-4">
+            <div class="flex items-center gap-2 text-indigo-400 font-semibold text-base border-b border-slate-700/60 pb-3">
+              <i class="fa-solid fa-network-wired"></i>
+              <span>网络与监听服务</span>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">监听地址 (HOST)</label>
+                <select v-model="form.HOST" class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                  <option value="0.0.0.0">0.0.0.0 (允许局域网/所有网卡)</option>
+                  <option value="127.0.0.1">127.0.0.1 (仅限本机访问)</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">监听端口 (PORT)</label>
+                <input type="number" v-model.number="form.PORT" placeholder="39527"
+                       class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">CORS 跨域允许域名 (ALLOWED_ORIGINS)</label>
+              <input type="text" v-model="form.ALLOWED_ORIGINS" placeholder="例如: http://localhost:3000,https://chat.example.com (留空为关闭)"
+                     class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+              <p class="text-xs text-slate-500 mt-1">仅在使用纯前端 Web 客户端直连本服务时需要配置，逗号分隔</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 高级仿真与出站代理配置 -->
+        <div class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-700/60 pb-3">
+            <div class="flex items-center gap-2 text-indigo-400 font-semibold text-base">
+              <i class="fa-solid fa-gears"></i>
+              <span>工具调用仿真与高级参数</span>
+            </div>
+            <button @click="showAdvanced = !showAdvanced" class="text-xs text-slate-400 hover:text-slate-200">
+              {{ showAdvanced ? '收起高级设置' : '展开高级设置' }} <i :class="showAdvanced ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'"></i>
+            </button>
+          </div>
+
+          <div v-show="showAdvanced" class="space-y-4 pt-2">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">工具调用模式 (POE_TOOL_MODE)</label>
+                <select v-model="form.POE_TOOL_MODE" class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white">
+                  <option value="auto">auto (优先原生，不支持自动降级仿真)</option>
+                  <option value="native">native (仅使用原生协议)</option>
+                  <option value="emulate">emulate (直接使用 Prompt 仿真)</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">重试次数 (POE_RETRY_COUNT)</label>
+                <input type="number" v-model.number="form.POE_RETRY_COUNT" min="0" max="5" class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white">
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 mb-1">流最大超时秒数 (POE_STREAM_TIMEOUT)</label>
+                <input type="number" v-model.number="form.POE_STREAM_TIMEOUT" class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white">
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-slate-300 mb-1">强制仿真 Bot 白名单 (POE_EMULATE_BOTS)</label>
+              <input type="text" v-model="form.POE_EMULATE_BOTS" placeholder="gemini-3.7-flash,gemini-3.6-flash"
+                     class="w-full bg-slate-900/80 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white">
+              <p class="text-xs text-slate-500 mt-1">已知不支持原生 tools 的 bot，跳过探测直接仿真以节约积分</p>
+            </div>
+
+            <!-- 出站代理 -->
+            <div class="border-t border-slate-700/60 pt-4">
+              <h4 class="text-xs font-semibold text-slate-300 mb-3 flex items-center gap-1.5">
+                <i class="fa-solid fa-globe"></i> 出站代理配置（留空为直连）
+              </h4>
+              <div class="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                <div>
+                  <label class="block text-[11px] text-slate-400 mb-1">代理类型</label>
+                  <select v-model="form.PROXY_TYPE" class="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                    <option value="">直连 (无代理)</option>
+                    <option value="http">HTTP 代理</option>
+                    <option value="socks">SOCKS5 代理</option>
+                  </select>
+                </div>
+                <div class="sm:col-span-2">
+                  <label class="block text-[11px] text-slate-400 mb-1">代理主机</label>
+                  <input type="text" v-model="form.PROXY_HOST" placeholder="127.0.0.1" class="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                </div>
+                <div>
+                  <label class="block text-[11px] text-slate-400 mb-1">代理端口</label>
+                  <input type="text" v-model="form.PROXY_PORT" placeholder="7890" class="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 保存按钮栏 -->
+        <div class="flex items-center justify-end gap-3 pt-2">
+          <button @click="fetchConfig" class="px-4 py-2.5 rounded-xl border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium transition">
+            重置
+          </button>
+          <button @click="saveConfig" :disabled="loading.save"
+                  class="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold shadow-lg shadow-indigo-600/30 transition disabled:opacity-50">
+            <i class="fa-solid fa-floppy-disk"></i>
+            <span>{{ loading.save ? '保存中...' : '保存配置' }}</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab 2: 模型映射表 -->
+      <div v-show="activeTab === 'mapping'" class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 space-y-4">
+        <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-700/60 pb-3">
+          <div>
+            <h3 class="text-base font-semibold text-indigo-400 flex items-center gap-2">
+              <i class="fa-solid fa-diagram-project"></i>
+              OpenAI 模型名 ↔ Poe Bot 映射
+            </h3>
+            <p class="text-xs text-slate-400 mt-0.5">客户端请求时传入的 model 参数将自动转换为对应的 Poe Bot</p>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="addMappingRow" class="px-3 py-1.5 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition">
+              <i class="fa-solid fa-plus"></i>
+              <span>新增映射</span>
+            </button>
+            <button @click="loadPresetMapping" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-semibold transition">
+              恢复默认映射
+            </button>
+          </div>
+        </div>
+
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead class="text-xs uppercase text-slate-400 bg-slate-900/50 border-b border-slate-700">
+              <tr>
+                <th class="py-2.5 px-3">OpenAI 模型名 (客户端调用)</th>
+                <th class="py-2.5 px-3">对应 Poe Bot 名</th>
+                <th class="py-2.5 px-3 w-16 text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/50">
+              <tr v-for="(row, idx) in mappingList" :key="idx" class="hover:bg-slate-800/40">
+                <td class="py-2 px-3">
+                  <input type="text" v-model="row.key" placeholder="例如: gpt-4o"
+                         class="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                </td>
+                <td class="py-2 px-3">
+                  <input type="text" v-model="row.value" placeholder="例如: gpt-4o"
+                         class="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                </td>
+                <td class="py-2 px-3 text-center">
+                  <button @click="removeMappingRow(idx)" class="text-rose-400 hover:text-rose-300 p-1">
+                    <i class="fa-solid fa-trash-can"></i>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="flex justify-end pt-2">
+          <button @click="saveMapping" :disabled="loading.save"
+                  class="px-6 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold shadow-lg shadow-indigo-600/30 transition">
+            保存映射
+          </button>
+        </div>
+      </div>
+
+      <!-- Tab 3: 测试 Playground -->
+      <div v-show="activeTab === 'playground'" class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- 连通性测试 -->
+        <div class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 space-y-4">
+          <div class="text-indigo-400 font-semibold text-base border-b border-slate-700/60 pb-3 flex items-center gap-2">
+            <i class="fa-solid fa-satellite-dish"></i>
+            <span>上游 Poe 连通性测试</span>
+          </div>
+          <p class="text-xs text-slate-400 leading-relaxed">
+            直接向 Poe 服务器发送探针请求，测试您的 Poe API Key 和出站网络代理是否畅通。
+          </p>
+          <button @click="testPoeConnection" :disabled="loading.testPoe"
+                  class="w-full py-2.5 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold rounded-xl flex items-center justify-center gap-2 transition disabled:opacity-50">
+            <i class="fa-solid fa-plug" :class="{'animate-pulse': loading.testPoe}"></i>
+            <span>{{ loading.testPoe ? '正在测试连接...' : '一键测试 Poe 连接' }}</span>
+          </button>
+
+          <div v-if="poeTestResult" class="p-3 rounded-xl text-xs"
+               :class="poeTestResult.success ? 'bg-emerald-950/60 border border-emerald-700/60 text-emerald-300' : 'bg-rose-950/60 border border-rose-700/60 text-rose-300'">
+            <div class="font-semibold mb-1 flex items-center gap-1.5">
+              <i :class="poeTestResult.success ? 'fa-solid fa-circle-check' : 'fa-solid fa-circle-xmark'"></i>
+              <span>{{ poeTestResult.success ? '测试成功' : '测试失败' }}</span>
+            </div>
+            <div>{{ poeTestResult.message }}</div>
+          </div>
+        </div>
+
+        <!-- 在线对话测试 Playground -->
+        <div class="lg:col-span-2 bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 flex flex-col gap-4">
+          <div class="flex items-center justify-between border-b border-slate-700/60 pb-3">
+            <div class="text-indigo-400 font-semibold text-base flex items-center gap-2">
+              <i class="fa-solid fa-comments"></i>
+              <span>快速对话测试 (Chat Playground)</span>
+            </div>
+            <select v-model="playground.model" class="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white">
+              <option v-for="(v, k) in config.model_mapping" :key="k" :value="k">{{ k }} ({{ v }})</option>
+            </select>
+          </div>
+
+          <div class="flex-1 min-h-[220px] max-h-[360px] overflow-y-auto bg-slate-900/90 rounded-xl p-4 border border-slate-700 space-y-3 text-xs">
+            <div v-if="playground.messages.length === 0" class="text-slate-500 text-center py-12">
+              输入消息并点击发送，以检验模型问答与工具仿真是否正常
+            </div>
+            <div v-for="(m, i) in playground.messages" :key="i" class="flex gap-2" :class="m.role === 'user' ? 'justify-end' : 'justify-start'">
+              <div class="max-w-[85%] rounded-xl p-3"
+                   :class="m.role === 'user' ? 'bg-indigo-600 text-white' : 'bg-slate-800 border border-slate-700 text-slate-200'">
+                <div class="font-bold text-[10px] mb-1 opacity-70">{{ m.role === 'user' ? 'User' : 'Assistant (' + m.model + ')' }}</div>
+                <div class="whitespace-pre-wrap leading-relaxed">{{ m.content }}</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="flex gap-2">
+            <input type="text" v-model="playground.input" @keyup.enter="sendPlaygroundChat" placeholder="输入测试消息，例如: 你好，介绍一下你自己"
+                   class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3.5 py-2.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+            <button @click="sendPlaygroundChat" :disabled="loading.chat || !status.running"
+                    class="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl flex items-center gap-1.5 transition disabled:opacity-50">
+              <i class="fa-solid fa-paper-plane"></i>
+              <span>{{ loading.chat ? '发送中...' : '发送' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab 4: 实时日志 -->
+      <div v-show="activeTab === 'logs'" class="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-5 space-y-4 flex flex-col flex-1">
+        <div class="flex items-center justify-between border-b border-slate-700/60 pb-3">
+          <div class="text-indigo-400 font-semibold text-base flex items-center gap-2">
+            <i class="fa-solid fa-terminal"></i>
+            <span>服务运行日志 (log/app.log)</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button @click="fetchLogs" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs font-medium transition flex items-center gap-1">
+              <i class="fa-solid fa-arrows-rotate"></i>
+              <span>刷新</span>
+            </button>
+          </div>
+        </div>
+
+        <pre class="bg-slate-950 text-slate-300 font-mono text-xs p-4 rounded-xl overflow-x-auto flex-1 min-h-[400px] max-h-[600px] whitespace-pre-wrap leading-relaxed border border-slate-800 select-all">{{ logs || '暂无日志数据...' }}</pre>
+      </div>
+    </main>
+
+    <!-- 底部状态与版权 -->
+    <footer class="text-center text-xs text-slate-500 py-2">
+      poe-to-openai &bull; 支持 Windows / macOS / Linux &bull; 访问端点: <code class="text-slate-400 font-mono">/v1/chat/completions</code>
+    </footer>
+
+    <!-- Toast 通知 -->
+    <div v-if="toast.show" class="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-2xl text-xs font-semibold text-white transition-all transform animate-bounce"
+         :class="toast.type === 'error' ? 'bg-rose-600' : 'bg-indigo-600'">
+      <i :class="toast.type === 'error' ? 'fa-solid fa-circle-exclamation' : 'fa-solid fa-circle-check'"></i>
+      <span>{{ toast.message }}</span>
+    </div>
+
+  </div>
+
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+
+    createApp({
+      setup() {
+        const activeTab = ref('config');
+        const showAdvanced = ref(false);
+        const showSystemToken = ref(false);
+        const logs = ref('');
+        const poeTestResult = ref(null);
+
+        const status = ref({
+          running: false,
+          pid: null,
+          platform_details: {},
+        });
+
+        const config = ref({
+          model_mapping: {}
+        });
+
+        const form = ref({
+          SYSTEM_TOKEN: '',
+          CUSTOM_TOKEN: '',
+          HOST: '0.0.0.0',
+          PORT: 39527,
+          ALLOWED_ORIGINS: '',
+          POE_TOOL_MODE: 'auto',
+          POE_RETRY_COUNT: 2,
+          POE_STREAM_TIMEOUT: 120,
+          POE_EMULATE_BOTS: 'gemini-3.7-flash,gemini-3.6-flash',
+          PROXY_TYPE: '',
+          PROXY_HOST: '',
+          PROXY_PORT: '',
+        });
+
+        const mappingList = ref([]);
+
+        const playground = ref({
+          model: 'gpt-4o-mini',
+          input: '',
+          messages: []
+        });
+
+        const loading = ref({
+          server: false,
+          save: false,
+          testPoe: false,
+          chat: false
+        });
+
+        const toast = ref({ show: false, message: '', type: 'info' });
+
+        const showToast = (message, type = 'info') => {
+          toast.value = { show: true, message, type };
+          setTimeout(() => { toast.value.show = false; }, 3000);
+        };
+
+        const osIcon = computed(() => {
+          const sys = (status.value.platform_details?.system || '').toLowerCase();
+          if (sys.includes('windows')) return 'fa-brands fa-windows';
+          if (sys.includes('darwin') || sys.includes('mac')) return 'fa-brands fa-apple';
+          return 'fa-brands fa-linux';
+        });
+
+        const fetchStatus = async () => {
+          try {
+            const res = await fetch('/api/admin/status');
+            if (res.ok) {
+              status.value = await res.json();
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        };
+
+        const fetchConfig = async () => {
+          try {
+            const res = await fetch('/api/admin/config');
+            if (res.ok) {
+              const data = await res.json();
+              config.value = data;
+              form.value = {
+                SYSTEM_TOKEN: '',
+                CUSTOM_TOKEN: data.custom_token || '',
+                HOST: data.host || '0.0.0.0',
+                PORT: data.port || 39527,
+                ALLOWED_ORIGINS: data.allowed_origins || '',
+                POE_TOOL_MODE: data.poe_tool_mode || 'auto',
+                POE_RETRY_COUNT: data.poe_retry_count || 2,
+                POE_STREAM_TIMEOUT: data.poe_stream_timeout || 120,
+                POE_EMULATE_BOTS: data.poe_emulate_bots || '',
+                PROXY_TYPE: data.proxy_type || '',
+                PROXY_HOST: data.proxy_host || '',
+                PROXY_PORT: data.proxy_port || '',
+              };
+              // 转化映射表为数组
+              const list = [];
+              for (const [k, v] of Object.entries(data.model_mapping || {})) {
+                list.push({ key: k, value: v });
+              }
+              mappingList.value = list;
+              if (list.length > 0 && !playground.value.model) {
+                playground.value.model = list[0].key;
+              }
+            }
+          } catch (e) {
+            showToast('获取配置失败', 'error');
+          }
+        };
+
+        const saveConfig = async () => {
+          loading.value.save = true;
+          try {
+            const payload = { ...form.value };
+            const res = await fetch('/api/admin/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (res.ok) {
+              showToast('配置已成功保存！');
+              fetchConfig();
+            } else {
+              showToast(data.detail || '保存失败', 'error');
+            }
+          } catch (e) {
+            showToast('请求出错: ' + e.message, 'error');
+          } finally {
+            loading.value.save = false;
+          }
+        };
+
+        const addMappingRow = () => {
+          mappingList.value.push({ key: '', value: '' });
+        };
+
+        const removeMappingRow = (idx) => {
+          mappingList.value.splice(idx, 1);
+        };
+
+        const loadPresetMapping = () => {
+          mappingList.value = [
+            { key: "gpt-5.4", value: "gpt-5.4" },
+            { key: "gpt-4o", value: "gpt-4o" },
+            { key: "gpt-4o-mini", value: "gpt-4o-mini" },
+            { key: "claude-sonnet-4.6", value: "claude-sonnet-4.6" },
+            { key: "claude-opus-4.8", value: "claude-opus-4.8" },
+            { key: "gemini-3.5-flash", value: "gemini-3.5-flash" },
+            { key: "gemini-3.1-pro", value: "gemini-3.1-pro" },
+            { key: "grok-4.6", value: "grok-4.6" },
+            { key: "dall-e-3", value: "gpt-image-2" },
+            { key: "nano-banana-2", value: "nano-banana-2" }
+          ];
+        };
+
+        const saveMapping = async () => {
+          loading.value.save = true;
+          try {
+            const mappingObj = {};
+            for (const r of mappingList.value) {
+              if (r.key.trim() && r.value.trim()) {
+                mappingObj[r.key.trim()] = r.value.trim();
+              }
+            }
+            const res = await fetch('/api/admin/config', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ MODEL_MAPPING: mappingObj })
+            });
+            if (res.ok) {
+              showToast('模型映射已保存');
+              fetchConfig();
+            } else {
+              showToast('保存失败', 'error');
+            }
+          } catch (e) {
+            showToast('出错: ' + e.message, 'error');
+          } finally {
+            loading.value.save = false;
+          }
+        };
+
+        const generateNewToken = async () => {
+          try {
+            const res = await fetch('/api/admin/token/generate', { method: 'POST' });
+            if (res.ok) {
+              const data = await res.json();
+              form.value.CUSTOM_TOKEN = data.token;
+              showToast('已生成新 Token，记得点击保存生效');
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        };
+
+        const copyToClipboard = (text) => {
+          if (!text) return;
+          navigator.clipboard.writeText(text).then(() => {
+            showToast('已复制到剪贴板');
+          });
+        };
+
+        const startServer = async () => {
+          loading.value.server = true;
+          try {
+            const res = await fetch('/api/admin/server/start', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+              showToast(data.message || '服务已启动');
+              fetchStatus();
+            } else {
+              showToast(data.detail || '启动失败', 'error');
+            }
+          } catch (e) {
+            showToast('启动出错: ' + e.message, 'error');
+          } finally {
+            loading.value.server = false;
+          }
+        };
+
+        const stopServer = async () => {
+          loading.value.server = true;
+          try {
+            const res = await fetch('/api/admin/server/stop', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+              showToast(data.message || '服务已停止');
+              fetchStatus();
+            } else {
+              showToast(data.detail || '停止失败', 'error');
+            }
+          } catch (e) {
+            showToast('停止出错: ' + e.message, 'error');
+          } finally {
+            loading.value.server = false;
+          }
+        };
+
+        const restartServer = async () => {
+          loading.value.server = true;
+          try {
+            const res = await fetch('/api/admin/server/restart', { method: 'POST' });
+            const data = await res.json();
+            if (res.ok) {
+              showToast('服务重启成功');
+              fetchStatus();
+            } else {
+              showToast(data.detail || '重启失败', 'error');
+            }
+          } catch (e) {
+            showToast('重启出错: ' + e.message, 'error');
+          } finally {
+            loading.value.server = false;
+          }
+        };
+
+        const fetchLogs = async () => {
+          try {
+            const res = await fetch('/api/admin/logs?lines=100');
+            if (res.ok) {
+              const data = await res.json();
+              logs.value = data.logs;
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        };
+
+        const testPoeConnection = async () => {
+          loading.value.testPoe = true;
+          poeTestResult.value = null;
+          try {
+            const res = await fetch('/api/admin/test-poe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ system_token: form.value.SYSTEM_TOKEN || undefined })
+            });
+            poeTestResult.value = await res.json();
+          } catch (e) {
+            poeTestResult.value = { success: false, message: '测试异常: ' + e.message };
+          } finally {
+            loading.value.testPoe = false;
+          }
+        };
+
+        const sendPlaygroundChat = async () => {
+          if (!playground.value.input.trim()) return;
+          const userText = playground.value.input.trim();
+          playground.value.messages.push({ role: 'user', content: userText });
+          playground.value.input = '';
+          loading.value.chat = true;
+
+          try {
+            const token = form.value.CUSTOM_TOKEN || config.value.custom_token;
+            const res = await fetch('/v1/chat/completions', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                model: playground.value.model,
+                messages: [{ role: 'user', content: userText }],
+                stream: false
+              })
+            });
+            const data = await res.json();
+            if (res.ok && data.choices && data.choices[0]) {
+              playground.value.messages.push({
+                role: 'assistant',
+                model: playground.value.model,
+                content: data.choices[0].message.content
+              });
+            } else {
+              playground.value.messages.push({
+                role: 'assistant',
+                model: playground.value.model,
+                content: '【请求失败】: ' + JSON.stringify(data)
+              });
+            }
+          } catch (e) {
+            playground.value.messages.push({
+              role: 'assistant',
+              model: playground.value.model,
+              content: '【网络错误】: ' + e.message
+            });
+          } finally {
+            loading.value.chat = false;
+          }
+        };
+
+        onMounted(() => {
+          fetchStatus();
+          fetchConfig();
+          setInterval(fetchStatus, 5000);
+        });
+
+        return {
+          activeTab,
+          showAdvanced,
+          showSystemToken,
+          logs,
+          status,
+          config,
+          form,
+          mappingList,
+          playground,
+          loading,
+          toast,
+          poeTestResult,
+          osIcon,
+          fetchConfig,
+          saveConfig,
+          addMappingRow,
+          removeMappingRow,
+          loadPresetMapping,
+          saveMapping,
+          generateNewToken,
+          copyToClipboard,
+          startServer,
+          stopServer,
+          restartServer,
+          fetchLogs,
+          testPoeConnection,
+          sendPlaygroundChat
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

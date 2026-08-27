@@ -30,34 +30,52 @@ An enhanced proxy service that converts the official [Poe](https://poe.com) API 
   - Validated lowercase model mappings matching current Poe bots (`gpt-5.4`, `claude-sonnet-4.6`, `claude-opus-4.8`, `gemini-3.5-flash`, etc.).
   - Up-to-date image generation models (`gpt-image-2`, `flux-2-dev`, `flux-2-pro`, `nano-banana-2`, `seedream-5.0-pro`), with automatic aspect ratio calculation.
   - Full catalog of 341 available bots and compute pricing available in [MODELS.md](MODELS.md).
+- **Cross-Platform Support & Unified Web UI Console (Zero-Friction Design)**:
+  - **Native Windows Support**: Out-of-the-box support with `start.bat` and the cross-platform `manager.py`, eliminating WSL or Bash dependencies.
+  - **Built-in Web Management UI** (at `http://localhost:39527/ui`): Auto-adapting dark UI featuring OS detection, one-click service start/stop/restart, `.env` config editor with key masking and token generator, visual model mapping table, Poe upstream connectivity diagnostics, and an integrated Chat Playground.
+  - **Zero Heavy Frontend Build Steps**: Pure SPA with Tailwind CDN and Vue.js — no Node.js, Electron, or PyQt build overhead.
 - **Production-Ready Deployment**:
-  - Dedicated macOS / Linux management scripts (`configure.sh`, `start.sh`) with dependency caching, port health check, and strict permission enforcement (`.env` 600).
+  - Windows: Double-click `start.bat` or run `python manager.py`.
+  - macOS / Linux: Run `./start.sh ui`, `./start.sh start`, or `python manager.py`.
 
 ---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-- macOS or Linux with **Python >= 3.10**
+- Windows / macOS / Linux with **Python >= 3.10**
 - A Poe subscription and API Key from [https://poe.com/api_key](https://poe.com/api_key)
 
-### 1. Installation & Configuration
+### 1. Unified Web UI Launcher (Recommended for all platforms)
 
 ```bash
 # Clone the repository
 git clone https://github.com/hongzuL/poe-to-openai.git
 cd poe-to-openai
 
-# Make scripts executable
-chmod +x configure.sh start.sh run.sh
+# Windows:
+Double-click start.bat (or run `python manager.py`)
 
-# Run interactive configuration (.env with permission 600)
-./configure.sh
+# macOS / Linux:
+./start.sh ui (or run `python manager.py`)
+```
+> The launcher will automatically boot the service and open the **Web UI Console (`http://localhost:39527/ui`)** in your default browser. You can configure your Poe API key, generate tokens, and test connectivity directly from the UI.
+
+### 2. Command Line Interface (CLI)
+
+#### Cross-Platform (`manager.py`)
+```bash
+python manager.py start       # Start in background
+python manager.py status      # Check running status & PID
+python manager.py restart     # Restart service
+python manager.py stop        # Stop service
+python manager.py log         # Follow real-time logs
+python manager.py run         # Run in foreground for debugging
 ```
 
-### 2. Service Management
-
+#### macOS / Linux Shell (`start.sh`)
 ```bash
+./start.sh ui          # Start background service and launch Web UI
 ./start.sh start       # Start in background (logs to log/app.log)
 ./start.sh status      # Check running status & PID
 ./start.sh log         # Follow real-time logs

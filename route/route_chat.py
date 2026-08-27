@@ -21,11 +21,6 @@ load_dotenv()
 MODELS_CREATED = 1720000000  # /v1/models 用的固定时间戳
 
 
-@router.get("/")
-async def root():
-    return {"message": "poe-to-openai is running"}
-
-
 @router.get("/v1/models")
 async def list_models():
     return {

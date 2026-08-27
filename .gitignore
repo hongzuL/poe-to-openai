@@ -37,3 +37,4 @@ test_data/
 
 # 其他
 fastapi_poe/
+local_token.txt

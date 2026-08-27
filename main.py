@@ -2,14 +2,17 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from api import poe_api
+from route.route_admin import router as admin_router
 from route.route_chat import router as chat_router
 from route.route_image import router as image_router
 
@@ -71,3 +74,16 @@ if allowed_origins:
 
 app.include_router(chat_router)
 app.include_router(image_router)
+app.include_router(admin_router)
+
+# 挂载 Web UI 静态文件与控制台页面
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+INDEX_HTML = STATIC_DIR / "index.html"
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/ui", response_class=HTMLResponse)
+async def serve_ui():
+    if INDEX_HTML.exists():
+        return FileResponse(INDEX_HTML)
+    return HTMLResponse("<h1>poe-to-openai 控制台页面未找到</h1>", status_code=404)
