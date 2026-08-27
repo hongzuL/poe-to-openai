@@ -46,7 +46,7 @@
 
 ### 环境要求
 - Windows / macOS / Linux（**Python >= 3.10**）
-- Poe 订阅账号，从 [https://poe.com/api_key](https://poe.com/api_key) 获取 API key
+- Poe 订阅账号，从 [https://poe.com/api](https://poe.com/api_key) 获取 API key
 
 ### 1. 统一 Web UI 控制台启动（推荐，全平台通用）
 

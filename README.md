@@ -44,7 +44,7 @@ An enhanced proxy service that converts the official [Poe](https://poe.com) API 
 
 ### Prerequisites
 - Windows / macOS / Linux with **Python >= 3.10**
-- A Poe subscription and API Key from [https://poe.com/api_key](https://poe.com/api_key)
+- A Poe subscription and API Key from [https://poe.com/api](https://poe.com/api_key)
 
 ### 1. Unified Web UI Launcher (Recommended for all platforms)
 

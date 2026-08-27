@@ -57,6 +57,10 @@ def cmd_start():
         print(f"启动成功! PID: {res.get('pid')}")
         print(f"服务地址: http://127.0.0.1:{port}")
         print(f"控制台:   http://127.0.0.1:{port}/ui")
+        try:
+            webbrowser.open(f"http://127.0.0.1:{port}/ui")
+        except Exception:
+            pass
     else:
         print(f"启动失败: {res.get('message')}")
         sys.exit(1)

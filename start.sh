@@ -109,6 +109,15 @@ gunicorn_cmd() {
     echo "$VENV_DIR/bin/gunicorn -w $workers -t 600 -k uvicorn.workers.UvicornWorker -b $host:$port main:app"
 }
 
+# 在默认浏览器中打开 Web UI（macOS / Linux）
+open_ui() {
+    local url="http://127.0.0.1:$1/ui"
+    case "$(uname -s)" in
+        Darwin) (open "$url" >/dev/null 2>&1 &) ;;
+        Linux)  (xdg-open "$url" >/dev/null 2>&1 &) ;;
+    esac
+}
+
 # ---------- 命令 ----------
 
 do_start() {
@@ -153,6 +162,8 @@ do_start() {
         fi
         if port_listener_pids "$port" | grep -qx "$pid"; then
             echo "启动成功 (PID ${pid}, 监听 $host:$port)"
+            echo "控制台: http://127.0.0.1:$port/ui"
+            open_ui "$port"
             exit 0
         fi
     done
