@@ -15,6 +15,7 @@ from api import poe_api
 from route.route_admin import router as admin_router
 from route.route_chat import router as chat_router
 from route.route_image import router as image_router
+from util.logging_utils import configure_logging
 
 load_dotenv()
 
@@ -43,10 +44,7 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logging.basicConfig(
-        level=logging.WARNING,
-        format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
-    )
+    configure_logging()
     if not os.environ.get("CUSTOM_TOKEN"):
         logging.warning("未设置 CUSTOM_TOKEN，所有 /v1/ 请求都会被拒绝")
     if not os.environ.get("SYSTEM_TOKEN"):

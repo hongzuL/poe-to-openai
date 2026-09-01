@@ -40,8 +40,10 @@ DEFAULT_CONFIG = {
     "POE_KEEPALIVE_SECONDS": "15",
     "POE_STREAM_TIMEOUT": "120",
     "POE_FIRST_EVENT_TIMEOUT": "30",
+    "POE_IDLE_TIMEOUT": "45",
     "POE_RETRY_COUNT": "2",
     "POE_DEBUG_LOG": "0",
+    "LOG_LEVEL": "INFO",
 }
 
 
@@ -110,8 +112,10 @@ def get_sanitized_config() -> Dict[str, Any]:
         "poe_keepalive_seconds": int(raw.get("POE_KEEPALIVE_SECONDS", "15")),
         "poe_stream_timeout": int(raw.get("POE_STREAM_TIMEOUT", "120")),
         "poe_first_event_timeout": int(raw.get("POE_FIRST_EVENT_TIMEOUT", "30")),
+        "poe_idle_timeout": int(raw.get("POE_IDLE_TIMEOUT", "45")),
         "poe_retry_count": int(raw.get("POE_RETRY_COUNT", "2")),
         "poe_debug_log": raw.get("POE_DEBUG_LOG", "0") == "1",
+        "log_level": raw.get("LOG_LEVEL", "INFO"),
     }
 
 
@@ -160,7 +164,9 @@ def save_env_config(updates: Dict[str, Any]) -> None:
         "POE_KEEPALIVE_SECONDS",
         "POE_STREAM_TIMEOUT",
         "POE_FIRST_EVENT_TIMEOUT",
+        "POE_IDLE_TIMEOUT",
         "POE_RETRY_COUNT",
+        "LOG_LEVEL",
     ]:
         if k in updates:
             current[k] = str(updates[k]).strip()
@@ -198,8 +204,10 @@ def save_env_config(updates: Dict[str, Any]) -> None:
         f"POE_KEEPALIVE_SECONDS={current.get('POE_KEEPALIVE_SECONDS', '15')}",
         f"POE_STREAM_TIMEOUT={current.get('POE_STREAM_TIMEOUT', '120')}",
         f"POE_FIRST_EVENT_TIMEOUT={current.get('POE_FIRST_EVENT_TIMEOUT', '30')}",
+        f"POE_IDLE_TIMEOUT={current.get('POE_IDLE_TIMEOUT', '45')}",
         f"POE_RETRY_COUNT={current.get('POE_RETRY_COUNT', '2')}",
         f"POE_DEBUG_LOG={current.get('POE_DEBUG_LOG', '0')}",
+        f"LOG_LEVEL={current.get('LOG_LEVEL', 'INFO')}",
         "",
     ]
 

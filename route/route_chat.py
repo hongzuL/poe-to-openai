@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from api import poe_api
 from util import utils
 from util.auth import get_poe_api_key
+from util.logging_utils import get_current_request_id, set_current_request_id
 from util.token_utils import calculate_usage
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,8 @@ async def list_models():
 
 @router.post("/v1/chat/completions")
 async def chat_proxy(request: Request):
+    req_id = set_current_request_id(request.headers.get("x-request-id"))
+
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -60,14 +64,26 @@ async def chat_proxy(request: Request):
     api_key = get_poe_api_key()
     session = getattr(request.app.state, "http_session", None)
 
+    logger.info("request_start: req_id=%s model=%s stream=%s tools=%d messages=%d",
+                req_id, model, stream, len(tools or []), len(messages))
+
+    headers = {
+        "X-Request-ID": req_id,
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+
     if stream:
         return StreamingResponse(
             openai_event_stream(model, processed_messages, api_key, tools, tool_choice,
-                                temperature, stop_sequences, session),
+                                temperature, stop_sequences, session, req_id),
             media_type="text/event-stream",
+            headers=headers,
         )
-    return await default_response(model, processed_messages, api_key, tools, tool_choice,
-                                  temperature, stop_sequences, session)
+    resp = await default_response(model, processed_messages, api_key, tools, tool_choice,
+                                  temperature, stop_sequences, session, req_id)
+    resp.headers["X-Request-ID"] = req_id
+    return resp
 
 
 def parse_stop(stop):
@@ -137,11 +153,11 @@ def prompt_text(messages):
     return "\n".join(poe_api.extract_text(msg.get("content")) for msg in messages if isinstance(msg, dict))
 
 
-def stream_chunk(model, delta, finish_reason=None, usage=None, include_role=False):
+def stream_chunk(model, delta, finish_reason=None, usage=None, include_role=False, completion_id=None):
     if include_role:
         delta = {"role": "assistant", **delta}
     return {
-        "id": f"chatcmpl-{utils.get_uuid()}",
+        "id": completion_id or f"chatcmpl-{utils.get_uuid()}",
         "object": "chat.completion.chunk",
         "created": int(datetime.now().timestamp()),
         "model": model,
@@ -158,18 +174,18 @@ def keepalive_interval():
 
 
 async def openai_event_stream(model, messages, api_key, tools, tool_choice,
-                              temperature, stop_sequences, session):
-    req_id = utils.get_8_random_str()
+                              temperature, stop_sequences, session, req_id=None):
+    if req_id:
+        set_current_request_id(req_id)
+    completion_id = f"chatcmpl-{utils.get_uuid()}"
+    start_time = time.monotonic()
     text_chunks = []
     had_tool_calls = False
     first_chunk = True
     n_chunks = 0
-    poe_api._dlog("流式开始 %s: model=%s messages=%d tools=%d",
-                  req_id, model, len(messages), len(tools or []))
+    keepalive_count = 0
+    finish_reason_from_upstream = None
 
-    # 上游事件放进队列，主循环按 keepalive_interval 轮询：
-    # 仿真模式需要攒完整段上游回复，期间长时间无输出，用 SSE 注释行（: keepalive）
-    # 保活，防止客户端因读超时而断开。
     queue = asyncio.Queue()
 
     async def produce():
@@ -189,6 +205,7 @@ async def openai_event_stream(model, messages, api_key, tools, tool_choice,
             try:
                 kind, payload = await asyncio.wait_for(queue.get(), timeout=keepalive_interval())
             except asyncio.TimeoutError:
+                keepalive_count += 1
                 yield ": keepalive\n\n"
                 continue
 
@@ -201,19 +218,27 @@ async def openai_event_stream(model, messages, api_key, tools, tool_choice,
             event = payload
             if event["kind"] == "text":
                 text_chunks.append(event["text"])
-                chunk = stream_chunk(model, {"content": event["text"]}, include_role=first_chunk)
+                chunk = stream_chunk(model, {"content": event["text"]},
+                                     include_role=first_chunk, completion_id=completion_id)
                 first_chunk = False
                 n_chunks += 1
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             elif event["kind"] == "tool_calls":
                 had_tool_calls = True
-                chunk = stream_chunk(model, {"tool_calls": event["tool_calls"]}, include_role=first_chunk)
+                chunk = stream_chunk(model, {"tool_calls": event["tool_calls"]},
+                                     include_role=first_chunk, completion_id=completion_id)
                 first_chunk = False
                 n_chunks += 1
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            elif event["kind"] == "finish":
+                finish_reason_from_upstream = event.get("finish_reason")
             elif event["kind"] == "replace":
-                # 已发送的 chunk 无法撤回，只能停止累计 usage 的旧文本
                 text_chunks.clear()
+    except asyncio.CancelledError:
+        elapsed = time.monotonic() - start_time
+        logger.warning("stream_cancelled: req_id=%s model=%s after=%.2fs chunks=%d",
+                       req_id, model, elapsed, n_chunks)
+        raise
     finally:
         if not producer.done():
             producer.cancel()
@@ -222,56 +247,57 @@ async def openai_event_stream(model, messages, api_key, tools, tool_choice,
             except Exception:
                 pass
 
-    if upstream_error is not None:
-        logger.error("Poe 上游请求失败: %s: %s", type(upstream_error).__name__, upstream_error)
-        poe_api._dlog("流式异常 %s: model=%s 已发chunks=%d 已发文本=%d字符 error=%r",
-                      req_id, model, n_chunks, sum(len(t) for t in text_chunks), upstream_error)
+    elapsed = time.monotonic() - start_time
 
-        # 超时或首次请求失败：给客户端一个明确的错误信息
-        if n_chunks == 0:
-            if isinstance(upstream_error, asyncio.TimeoutError):
-                error_content = f"Poe upstream timeout: {upstream_error}"
-            else:
-                error_content = f"Poe upstream error ({type(upstream_error).__name__}): {upstream_error}"
-            chunk = stream_chunk(model, {"content": error_content}, finish_reason="stop",
-                                 include_role=True)
-            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-        else:
-            # 已经给客户端发过内容，发送一个空的 finish chunk
-            yield f"data: {json.dumps(stream_chunk(model, {}, finish_reason='stop'), ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
+    if upstream_error is not None:
+        logger.error("stream_error: req_id=%s model=%s error_type=%s error=%s elapsed=%.2fs chunks=%d",
+                     req_id, model, type(upstream_error).__name__, upstream_error, elapsed, n_chunks)
+
+        err_payload = {
+            "error": {
+                "message": str(upstream_error) or type(upstream_error).__name__,
+                "type": "upstream_error",
+                "code": "poe_upstream_error",
+            }
+        }
+        # 输出符合 OpenAI 规范的错误 SSE 消息，明确告知客户端失败，不再追加虚假的 stop + [DONE]
+        yield f"data: {json.dumps(err_payload, ensure_ascii=False)}\n\n"
         return
 
     usage = calculate_usage(prompt_text(messages), "".join(text_chunks), model)
-    finish_reason = "tool_calls" if had_tool_calls else "stop"
-    poe_api._dlog("流式结束 %s: model=%s chunks=%d 文本=%d字符 tool_calls=%s finish=%s",
-                  req_id, model, n_chunks, sum(len(t) for t in text_chunks),
-                  had_tool_calls, finish_reason)
-    final_chunk = stream_chunk(model, {}, finish_reason=finish_reason, usage=usage)
+    finish_reason = finish_reason_from_upstream or ("tool_calls" if had_tool_calls else "stop")
+    logger.info("stream_completed: req_id=%s model=%s elapsed=%.2fs chunks=%d chars=%d tool_calls=%s keepalive=%d finish=%s",
+                req_id, model, elapsed, n_chunks, sum(len(t) for t in text_chunks),
+                had_tool_calls, keepalive_count, finish_reason)
+
+    final_chunk = stream_chunk(model, {}, finish_reason=finish_reason, usage=usage, completion_id=completion_id)
     yield f"data: {json.dumps(final_chunk, ensure_ascii=False)}\n\n"
     yield "data: [DONE]\n\n"
 
 
 async def default_response(model, messages, api_key, tools, tool_choice,
-                           temperature, stop_sequences, session):
-    req_id = utils.get_8_random_str()
-    poe_api._dlog("非流式开始 %s: model=%s messages=%d tools=%d",
-                  req_id, model, len(messages), len(tools or []))
+                           temperature, stop_sequences, session, req_id=None):
+    if req_id:
+        set_current_request_id(req_id)
+    start_time = time.monotonic()
     try:
         result = await poe_api.get_responses(api_key, messages, model, tools, tool_choice,
                                              temperature, stop_sequences, session)
     except Exception as e:
-        logger.error("Poe 上游请求失败: %s: %s", type(e).__name__, e)
+        elapsed = time.monotonic() - start_time
+        logger.error("nonstream_error: req_id=%s model=%s error_type=%s error=%s elapsed=%.2fs",
+                     req_id, model, type(e).__name__, e, elapsed)
         detail = str(e)[:300] or type(e).__name__
         return error_response(502, f"上游 Poe 请求失败: {detail}", "upstream_error")
 
-    poe_api._dlog("非流式结束 %s: model=%s 文本=%d字符 tool_calls=%d",
-                  req_id, model, len(result["text"]),
-                  len(result.get("tool_calls") or []))
-
+    elapsed = time.monotonic() - start_time
     usage = calculate_usage(prompt_text(messages), result["text"], model)
+    had_tool_calls = bool(result.get("tool_calls"))
 
-    if result.get("tool_calls"):
+    logger.info("nonstream_completed: req_id=%s model=%s elapsed=%.2fs chars=%d tool_calls=%s",
+                req_id, model, elapsed, len(result["text"]), had_tool_calls)
+
+    if had_tool_calls:
         message = {
             "role": "assistant",
             "content": result["text"] or None,

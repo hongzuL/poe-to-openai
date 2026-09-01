@@ -44,8 +44,10 @@ class ConfigUpdateRequest(BaseModel):
     POE_KEEPALIVE_SECONDS: Optional[int] = None
     POE_STREAM_TIMEOUT: Optional[int] = None
     POE_FIRST_EVENT_TIMEOUT: Optional[int] = None
+    POE_IDLE_TIMEOUT: Optional[int] = None
     POE_RETRY_COUNT: Optional[int] = None
     POE_DEBUG_LOG: Optional[bool] = None
+    LOG_LEVEL: Optional[str] = None
 
 
 class TestPoeRequest(BaseModel):

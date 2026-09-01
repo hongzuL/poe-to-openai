@@ -2,8 +2,10 @@
 Poe 协议层：OpenAI 格式与 Poe 官方 API（fastapi_poe SDK）之间的转换。
 
 关键设计（对应 fastapi_poe 0.0.70 的协议事实）：
-- 工具调用历史通过 Poe 协议的顶层 tool_calls / tool_results 字段传递
-  （而不是塞进消息列表），只有 stream_request_base 支持这两个字段。
+- 工具调用历史：只有"当前轮"（消息列表末尾的 assistant tool_calls 及其配对的
+  tool 结果）通过 Poe 协议的顶层 tool_calls / tool_results 字段传递 —— 该字段
+  按 fastapi_poe 文档只承载最后一轮交互；更早的历史轮次折叠为文本消息保留在
+  对话流中，避免多轮历史压入顶层后被上游重建为错位/不合法的消息序列。
 - Poe 协议没有 tool_choice，按以下规则模拟：
     "none"                                        -> 不发送任何工具定义
     {"type": "function", "function": {"name": X}} -> 只发送名为 X 的工具
@@ -48,6 +50,19 @@ DEFAULT_BOT = "gpt-4o"
 _NATIVE_TOOLS_UNSUPPORTED = {}
 
 
+class PoeStreamTimeoutError(asyncio.TimeoutError):
+    """区分不同阶段的 Poe 超时"""
+    def __init__(self, phase: str, timeout_seconds: float):
+        self.phase = phase
+        self.timeout_seconds = timeout_seconds
+        super().__init__(f"Poe stream {phase} timeout ({timeout_seconds}s) exceeded")
+
+
+class IncompleteToolActionError(RuntimeError):
+    """模型宣告了工具动作但未生成有效工具调用块"""
+    pass
+
+
 def _get_stream_timeout():
     """POE_STREAM_TIMEOUT：整个 Poe 流的超时秒数（默认 120）。"""
     try:
@@ -64,27 +79,38 @@ def _get_first_event_timeout():
         return 30
 
 
-# ---------- 诊断日志（POE_DEBUG_LOG=1 时启用，输出到 WARNING，前缀 DIAG） ----------
+def _get_idle_timeout():
+    """POE_IDLE_TIMEOUT：事件之间的空闲超时秒数（默认 45）。"""
+    try:
+        return max(5, int(os.environ.get("POE_IDLE_TIMEOUT", "45")))
+    except ValueError:
+        return 45
+
+
+# ---------- 诊断日志（POE_DEBUG_LOG=1 时启用，前缀 DIAG） ----------
 
 def _debug_enabled():
     return os.environ.get("POE_DEBUG_LOG", "").lower() in ("1", "true", "yes")
 
 
 def _dlog(msg, *args):
-    """诊断日志。仅在 POE_DEBUG_LOG 开启时输出；可能包含内容片段，仅用于临时排障。"""
+    """诊断日志。仅在 POE_DEBUG_LOG 开启时输出；避免直接在日志中包含大段完整敏感文本。"""
     if _debug_enabled():
-        logger.warning("DIAG " + msg, *args)
+        logger.info("DIAG " + msg, *args)
 
 
 # ---------- 流超时控制 ----------
 
-async def _stream_with_timeout(generator, first_timeout, total_timeout):
+async def _stream_with_timeout(generator, first_timeout, total_timeout, idle_timeout=None):
     """
     为异步生成器的每个 item 添加超时保护：
-    - first_timeout：首个 item 的超时（秒），防止 Poe 连接后无响应
-    - total_timeout：整个流的超时（秒），防止单次请求无限挂起
-    超时抛出 asyncio.TimeoutError。
+    - first_timeout：首个 item 的超时（秒）
+    - total_timeout：整个流的总超时（秒）
+    - idle_timeout：后续 item 之间的最大空闲间隔（秒）
     """
+    if idle_timeout is None:
+        idle_timeout = _get_idle_timeout()
+
     start_time = time.monotonic()
     agen = generator.__aiter__()
     first = True
@@ -92,19 +118,21 @@ async def _stream_with_timeout(generator, first_timeout, total_timeout):
     while True:
         if first:
             timeout = first_timeout
+            phase = "first_event"
             first = False
         else:
             elapsed = time.monotonic() - start_time
             remaining = total_timeout - elapsed
             if remaining <= 0:
-                raise asyncio.TimeoutError(
-                    f"Poe stream total timeout ({total_timeout}s) exceeded after {elapsed:.0f}s"
-                )
-            timeout = min(remaining, 30)  # 每个后续 chunk 最多等 30 秒
+                raise PoeStreamTimeoutError("total", total_timeout)
+            timeout = min(remaining, idle_timeout)
+            phase = "idle"
 
         try:
             item = await asyncio.wait_for(agen.__anext__(), timeout)
             yield item
+        except asyncio.TimeoutError:
+            raise PoeStreamTimeoutError(phase, timeout)
         except StopAsyncIteration:
             break
 
@@ -169,33 +197,82 @@ def extract_text(content):
     return str(content)
 
 
+def _fold_assistant_to_text(message):
+    """assistant 消息 -> 纯文本：tool_calls 以只读文本块形式附在正文后面，
+    用于把历史轮次的工具调用保留在对话流中（非当前轮不再有原生结构）。"""
+    text = extract_text(message.get("content"))
+    blocks = []
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        arguments = function.get("arguments", "")
+        if not isinstance(arguments, str):
+            arguments = json.dumps(arguments, ensure_ascii=False)
+        blocks.append(f"[Tool call: {function.get('name', '')}]\n{arguments}")
+    if blocks:
+        block = "\n\n".join(blocks)
+        text = (text + "\n\n" + block).strip() if text else block
+    return text
+
+
+def _fold_tool_result_text(message):
+    """role="tool" 的工具结果 -> user 文本消息（保留工具输出内容）。"""
+    name = message.get("name") or message.get("tool_call_id") or "tool"
+    content = extract_text(message.get("content"))
+    return f"[Tool result for {name}]\n{content}"
+
+
 def convert_messages(messages):
     """
     OpenAI messages -> (poe_messages, tool_calls, tool_results)
 
-    assistant 消息携带的 tool_calls 和 role="tool" 的工具结果不进消息列表，
-    而是收集为协议顶层字段 —— 这是 Poe 协议表达工具历史的唯一通道。
+    Poe 协议的顶层 tool_calls / tool_results 按 fastapi_poe 文档只承载"最后一轮"
+    工具交互（没有位置信息）。因此只有消息列表末尾的当前轮（尾部带 tool_calls 的
+    assistant 及其配对的 tool 结果）进入顶层字段；更早的历史轮次折叠为文本消息
+    保留在对话流中 —— 调用与结果在文本中相邻，语义完整，且保证上游重建出的
+    消息序列永远合法（历史多轮全部压入顶层会被重建为"tool 消息前没有带
+    tool_calls 的 assistant"，触发 messages.[N].role 400）。
     """
+    msgs = [m for m in messages if isinstance(m, dict)]
+
+    # 定位尾部工具块：末尾连续的 tool 消息，及其前方带 tool_calls 的 assistant；
+    # 末尾本身就是带 tool_calls 的 assistant（等结果）也构成尾部块
+    tail_start = len(msgs)
+    i = len(msgs) - 1
+    while i >= 0 and msgs[i].get("role") == "tool":
+        i -= 1
+    if i >= 0 and msgs[i].get("role") == "assistant" and msgs[i].get("tool_calls"):
+        tail_start = i
+
     poe_messages = []
     tool_calls = []
     tool_results = []
 
-    for message in messages:
-        if not isinstance(message, dict):
-            continue
+    # 头部（历史轮次）：全部折叠为文本消息，不使用顶层字段
+    for message in msgs[:tail_start]:
         role = message.get("role")
-
         if role in ("system", "developer"):
             content = extract_text(message.get("content"))
             if content:
                 poe_messages.append(ProtocolMessage(role="system", content=content))
-
         elif role == "user":
             poe_messages.append(
                 ProtocolMessage(role="user", content=extract_text(message.get("content")))
             )
-
         elif role == "assistant":
+            text = _fold_assistant_to_text(message)
+            if text:
+                poe_messages.append(ProtocolMessage(role="bot", content=text))
+        elif role == "tool":
+            poe_messages.append(
+                ProtocolMessage(role="user", content=_fold_tool_result_text(message))
+            )
+
+    # 尾部（当前轮）：走顶层字段，保留原生结构；仍做配对校验
+    pending_ids = []  # 已声明、尚未收到结果的 tool_call id
+    for message in msgs[tail_start:]:
+        role = message.get("role")
+
+        if role == "assistant":
             content = extract_text(message.get("content"))
             if content:
                 poe_messages.append(ProtocolMessage(role="bot", content=content))
@@ -204,24 +281,72 @@ def convert_messages(messages):
                 arguments = function.get("arguments", "")
                 if not isinstance(arguments, str):
                     arguments = json.dumps(arguments, ensure_ascii=False)
+                call_id = call.get("id") or f"call_{len(tool_calls)}"
                 tool_calls.append(ToolCallDefinition(
-                    id=call.get("id") or f"call_{len(tool_calls)}",
+                    id=call_id,
                     type=call.get("type") or "function",
                     function=ToolCallDefinition.FunctionDefinition(
                         name=function.get("name", ""),
                         arguments=arguments,
                     ),
                 ))
+                pending_ids.append(call_id)
 
         elif role == "tool":
-            tool_results.append(ToolResultDefinition(
-                role="tool",
-                name=message.get("name") or "",
-                tool_call_id=message.get("tool_call_id") or "",
-                content=extract_text(message.get("content")),
-            ))
+            call_id = message.get("tool_call_id") or ""
+            if call_id in pending_ids:
+                tool_results.append(ToolResultDefinition(
+                    role="tool",
+                    name=message.get("name") or "",
+                    tool_call_id=call_id,
+                    content=extract_text(message.get("content")),
+                ))
+                pending_ids.remove(call_id)
+            else:
+                # 尾部孤儿工具结果（id 与当前轮 calls 不匹配）：折叠为文本
+                _dlog("convert_messages: 尾部孤儿 tool 消息折叠为文本 (tool_call_id=%s)", call_id)
+                poe_messages.append(
+                    ProtocolMessage(role="user", content=_fold_tool_result_text(message))
+                )
+
+        else:
+            # 尾部块中理论上不出现其他 role，稳妥起见按头部规则折叠
+            if role in ("system", "developer"):
+                content = extract_text(message.get("content"))
+                if content:
+                    poe_messages.append(ProtocolMessage(role="system", content=content))
+            elif role == "user":
+                poe_messages.append(
+                    ProtocolMessage(role="user", content=extract_text(message.get("content")))
+                )
+
+    # 尾部未配对的悬空 calls：若最后一条消息不是那条 assistant（即有结果消息
+    # 跟在后面但数量不齐），这些 call 永远等不到结果，从顶层剔除；
+    # 若末尾就是 assistant 本身（等结果中），保留 —— 顶层字段的原生语义
+    if pending_ids and msgs and msgs[-1].get("role") != "assistant":
+        dangling = set(pending_ids)
+        _dlog("convert_messages: 剔除尾部悬空 calls: %s", sorted(dangling))
+        tool_calls[:] = [c for c in tool_calls if c.id not in dangling]
 
     return poe_messages, tool_calls or None, tool_results or None
+
+
+def _structure_summary(messages, limit=80):
+    """压缩消息角色序列为单行字符串（如 "S U A+tc T U"），用于上游报错时诊断。
+    A+tc 表示带 tool_calls 的 assistant，T 表示 role=tool。"""
+    seq = []
+    for m in messages or []:
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "role", None)
+        if role == "assistant" and isinstance(m, dict) and m.get("tool_calls"):
+            seq.append("A+tc")
+        elif role:
+            seq.append({"assistant": "A", "tool": "T"}.get(role, role[:1].upper()))
+        else:
+            seq.append("?")
+    if len(seq) > limit:
+        half = limit // 2
+        seq = seq[:half] + ["..."] + seq[-half:]
+    return " ".join(seq)
 
 
 # ---------- 工具定义转换 ----------
@@ -785,11 +910,26 @@ def merge_tool_delta(aggregated, delta):
 
 
 def _is_transient_error(exception):
-    """判断是否是可重试的瞬态错误（BotError、空响应等 Poe 后端偶发故障）。"""
+    """判断是否是可重试的瞬态错误（BotError、空响应、超时等 Poe 后端偶发故障）。"""
+    if isinstance(exception, (asyncio.TimeoutError, httpx.TimeoutException, httpx.NetworkError, PoeStreamTimeoutError)):
+        return True
     msg = str(exception).lower()
-    return any(kw in msg for kw in ("error communicating with bot", "internal server error",
-                                      "service unavailable", "rate limit", "timeout",
-                                      "empty response"))
+    return any(kw in msg for kw in (
+        "error communicating with bot", "internal server error",
+        "service unavailable", "rate limit", "timeout", "timed out",
+        "empty response", "connection reset", "broken pipe"
+    ))
+
+
+def _is_tool_rejection(exception):
+    """判断异常是否表明该 Bot 不支持原生 tools 协议。"""
+    if exception is None:
+        return False
+    msg = str(exception).lower()
+    return any(kw in msg for kw in (
+        "does not support tools", "not support tools", "tool calls are not supported",
+        "invalid tool definition", "unsupported tool", "bot does not accept tools"
+    ))
 
 
 def _get_retry_count():
@@ -817,6 +957,7 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
       {"kind": "text", "text": str}
       {"kind": "tool_calls", "tool_calls": [delta...]}
       {"kind": "replace"}
+      {"kind": "finish", "finish_reason": str}
     """
     poe_messages, history_tool_calls, history_tool_results = convert_messages(messages)
     query = _build_query(poe_messages, temperature, stop_sequences)
@@ -851,6 +992,7 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
             stream_gen,
             _get_first_event_timeout(),
             _get_stream_timeout(),
+            _get_idle_timeout(),
         ):
             event_count += 1
             data = getattr(message, "data", None)
@@ -861,6 +1003,7 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
                 if choice.get("finish_reason") is not None:
                     _dlog("native_stream: bot=%s 收到 finish_reason=%s (events=%d 文本=%d字符)",
                           bot_name, choice.get("finish_reason"), event_count, text_len)
+                    yield {"kind": "finish", "finish_reason": choice.get("finish_reason")}
                     continue
                 delta = choice.get("delta") or {}
                 if delta.get("tool_calls"):
@@ -883,13 +1026,18 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
             if text:
                 text_len += len(text)
                 yield {"kind": "text", "text": text}
-    except asyncio.TimeoutError as e:
-        _dlog("native_stream 超时: bot=%s events=%d 已收文本=%d字符 timeout=%s",
-              bot_name, event_count, text_len, e)
-        raise
     except Exception as e:
         _dlog("native_stream 异常: bot=%s events=%d 已收文本=%d字符 error=%r",
               bot_name, event_count, text_len, e)
+        # 上游报错时记录完整结构现场，便于诊断消息序列类 400 错误
+        logger.warning(
+            "native_stream 上游错误: bot=%s error=%r | 客户端消息结构(%d条)=%s | "
+            "发送Poe角色序列(%d条)=%s | 顶层calls=%s results=%s",
+            bot_name, e, len(messages), _structure_summary(messages),
+            len(poe_messages), _structure_summary(poe_messages),
+            [c.id for c in history_tool_calls or []],
+            [r.tool_call_id for r in history_tool_results or []],
+        )
         raise
 
     if event_count == 0:
@@ -903,9 +1051,11 @@ async def _native_stream(api_key, messages, model, tools=None, tool_choice=None,
 
 # ---------- 仿真模式查询 ----------
 
-# 模型"只宣布意图未执行"的判别（短文本 + 意图词，且无工具调用）
-_INTENT_RE = re.compile(
-    r"(i'?m going to|i will|i'?ll\b|let me|我将|我会|我先|我来|接下来我|首先我|now i will|first i will)",
+_INTENT_PREFIX_RE = re.compile(
+    r"^(i\s+am\s+about\s+to|i['’]m\s+about\s+to|i\s+am\s+going\s+to|i['’]m\s+going\s+to|"
+    r"i\s+will|i['’]ll|let\s+me|i\s+intend\s+to|i\s+plan\s+to|"
+    r"now\s+i\s+will|first\s+i\s+will|"
+    r"我将|我会|我先|我来|接下来我|首先我|我准备|我打算|让我先)",
     re.IGNORECASE,
 )
 
@@ -916,22 +1066,47 @@ _CONTINUATION_NUDGE = (
 )
 
 
+def _is_announce_only(text: str) -> bool:
+    """
+    判断模型输出是否为纯意图宣告（announce-only）：
+    - 剥离 thinking 后的净文本小于 600 字符；
+    - 必须从行首或首句以第一人称动作意图开头；
+    - 排除 'Let me know', 'This will work' 等误判。
+    """
+    if not text:
+        return False
+    stripped = _strip_thinking(text).strip()
+    if not stripped or len(stripped) >= 600:
+        return False
+    if parse_tool_calls_from_text(stripped):
+        return False
+
+    first_line = stripped.split("\n", 1)[0].strip()
+    first_line_clean = re.sub(r"^[>\s*#\-`]+", "", first_line).strip()
+
+    # 排除 'let me know'
+    if re.match(r"^let\s+me\s+know\b", first_line_clean, re.IGNORECASE):
+        return False
+
+    return bool(_INTENT_PREFIX_RE.search(first_line_clean))
+
+
 async def _emulated_events(api_key, messages, model, tools, tool_choice,
                            temperature, stop_sequences, session):
     """
     prompt 仿真：注入工具提示词 + 折叠工具历史 -> 普通查询 -> 解析输出。
     注意：工具调用的判定依赖完整回复，所以仿真模式会先聚合全部文本再产出事件。
-    模型"只宣布意图未执行"（announce-only）时自动续一轮：把宣告作为 assistant
-    消息回传并附加强制提示，最多续一次。
+    模型"只宣布意图未执行"（announce-only）时自动续轮：最多续 2 次；仍未调用则抛出明确错误。
     """
     emulated_messages = fold_tool_history(messages)
     emulated_messages = inject_tools_prompt(emulated_messages, tools, tool_choice)
 
     current = emulated_messages
-    full_text = ""
     tool_calls = None
+    final_text = ""
+    max_attempts = 2
 
-    for attempt in range(2):
+    for attempt in range(max_attempts):
         text_parts = []
         async for event in _native_stream(
             api_key, current, model, tools=None, tool_choice=None,
@@ -943,45 +1118,50 @@ async def _emulated_events(api_key, messages, model, tools, tool_choice,
                 text_parts.clear()
 
         chunk = "".join(text_parts)
-        full_text = chunk if not full_text else full_text + "\n" + chunk
-        tool_calls = parse_tool_calls_from_text(chunk)
-        if tool_calls:
-            break
-
         stripped_chunk = _strip_thinking(chunk)
+
         if not stripped_chunk:
-            # 纯思考响应：瞬态错误，由 query_stream 重试
             raise RuntimeError(
                 f"Poe returned empty response (thinking-only) for bot {get_bot(model)}"
             )
-        # 意图宣告未执行（短文本 + 意图词）：续一轮强制其行动
-        if attempt == 0 and len(stripped_chunk) < 600 and _INTENT_RE.search(stripped_chunk):
-            _dlog("emulated: bot=%s 检测到意图宣告但未执行（%d字符），自动续一轮",
-                  get_bot(model), len(stripped_chunk))
-            current = current + [
-                {"role": "assistant", "content": chunk},
-                {"role": "user", "content": _CONTINUATION_NUDGE},
-            ]
-            continue
+
+        tool_calls = parse_tool_calls_from_text(chunk)
+        if tool_calls:
+            final_text = chunk
+            break
+
+        if _is_announce_only(stripped_chunk):
+            if attempt < max_attempts - 1:
+                _dlog("emulated: bot=%s 检测到意图宣告未执行（%d字符），自动续轮 %d/%d",
+                      get_bot(model), len(stripped_chunk), attempt + 1, max_attempts - 1)
+                current = current + [
+                    {"role": "assistant", "content": stripped_chunk},
+                    {"role": "user", "content": _CONTINUATION_NUDGE},
+                ]
+                continue
+            else:
+                raise IncompleteToolActionError(
+                    f"Model announced tool intent ({stripped_chunk[:120]!r}) but did not execute a tool call."
+                )
+
+        final_text = chunk
         break
 
     if tool_calls:
-        remaining = strip_tool_json_block(full_text)
-        _dlog("emulated: bot=%s 原文=%d字符 -> 解析出 %d 个工具调用，剩余文本 %d 字符",
-              get_bot(model), len(full_text), len(tool_calls), len(remaining))
+        remaining = strip_tool_json_block(final_text)
+        _dlog("emulated: bot=%s 原文=%d字符 -> 解析出 %d 个工具调用",
+              get_bot(model), len(final_text), len(tool_calls))
         if remaining:
             yield {"kind": "text", "text": remaining}
         yield {"kind": "tool_calls", "tool_calls": tool_calls}
     else:
-        # 未解析到工具调用：记录原文长度和尾部预览（判断是否被 Poe 截断在 JSON 中途）
-        _dlog("emulated: bot=%s 原文=%d字符，未解析到工具调用。尾部预览: %r",
-              get_bot(model), len(full_text), full_text[-120:])
-        stripped = _strip_thinking(full_text)
+        if tool_choice == "required":
+            raise RuntimeError("tool_choice was 'required' but no valid tool call was generated.")
+        stripped = _strip_thinking(final_text)
         if not stripped:
             raise RuntimeError(
                 f"Poe returned empty response (thinking-only) for bot {get_bot(model)}"
             )
-        # 合法文本回答：剥离 thinking 块后再返回给客户端，避免噪声混入答案
         yield {"kind": "text", "text": stripped}
 
 
@@ -1021,7 +1201,6 @@ async def query_stream(api_key, messages, model, tools=None, tool_choice=None,
                 yield event
             return
         except Exception as e:
-            # 已经给客户端发过内容就不能降级了；原生强制模式下也不降级
             if yielded_any or mode == "native" or not _is_tool_rejection(e):
                 raise
             _NATIVE_TOOLS_UNSUPPORTED[bot] = True
@@ -1046,6 +1225,12 @@ async def query_stream(api_key, messages, model, tools=None, tool_choice=None,
                     continue
                 raise
         return
+
+    async for event in _native_stream(
+        api_key, messages, model, tools, tool_choice,
+        temperature, stop_sequences, session,
+    ):
+        yield event
 
     async for event in _native_stream(
         api_key, messages, model, tools, tool_choice,

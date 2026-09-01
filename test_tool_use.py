@@ -139,7 +139,7 @@ def test_stream():
             got_usage = True
         if chunk["choices"][0].get("finish_reason"):
             pass
-    report("流式: 收到内容 chunk", got_tool_calls or got_text,
+    report("流式: 必须收到 tool_calls chunk", got_tool_calls,
            f"tool_calls={got_tool_calls}, text={got_text}")
     report("流式: 正常结束([DONE]) 且带 usage", got_done and got_usage)
 
