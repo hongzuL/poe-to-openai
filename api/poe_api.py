@@ -39,12 +39,13 @@ from fastapi_poe import (
     get_bot_response,
 )
 from fastapi_poe.client import stream_request_base
+from dotenv import dotenv_values
+
+from util.env_manager import ENV_PATH
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 600
-
-DEFAULT_BOT = "gpt-4o"
 
 # 进程内缓存：记录已知不支持原生 tools 的 bot（auto 模式下避免重复探测失败）
 _NATIVE_TOOLS_UNSUPPORTED = {}
@@ -139,16 +140,47 @@ async def _stream_with_timeout(generator, first_timeout, total_timeout, idle_tim
 
 # ---------- 模型映射 ----------
 
+# MODEL_MAPPING 热加载缓存：按 .env 文件 mtime 判断是否重读，
+# 修改映射后（Web UI 保存 / 手动编辑）下一个请求即生效，无需重启服务
+_MODEL_MAPPING_CACHE = {"mtime": None, "mapping": None}
+
+
 def _load_model_mapping():
     try:
-        return json.loads(os.environ.get("MODEL_MAPPING", "{}"))
-    except json.JSONDecodeError:
-        logger.warning("MODEL_MAPPING 不是合法 JSON，按空映射处理")
-        return {}
+        mtime = os.path.getmtime(ENV_PATH)
+    except OSError:
+        mtime = None
+
+    cache = _MODEL_MAPPING_CACHE
+    if mtime != cache["mtime"] or cache["mapping"] is None:
+        raw = None
+        if mtime is not None:
+            try:
+                raw = dotenv_values(ENV_PATH).get("MODEL_MAPPING")
+            except Exception as e:
+                logger.warning("读取 .env 失败，回退到进程环境变量: %s", e)
+        if raw is None:
+            # .env 不存在或其中没有 MODEL_MAPPING 时，回退到进程环境变量
+            raw = os.environ.get("MODEL_MAPPING", "{}")
+        try:
+            mapping = json.loads(raw)
+            if not isinstance(mapping, dict):
+                mapping = {}
+        except json.JSONDecodeError:
+            logger.warning("MODEL_MAPPING 不是合法 JSON，按空映射处理")
+            mapping = {}
+        if mapping != cache["mapping"]:
+            logger.info("MODEL_MAPPING 已重载（%d 条映射）", len(mapping))
+        cache["mtime"] = mtime
+        cache["mapping"] = mapping
+    return cache["mapping"]
 
 
 def get_bot(model):
-    return _load_model_mapping().get(model, DEFAULT_BOT)
+    """返回 model 映射的 Poe bot 名；未配置映射时返回 None（不再静默回退到
+    默认模型 —— 调用方应据此向客户端返回明确错误，避免"请求 A 模型实际走了
+    B 模型"的隐蔽问题）。"""
+    return _load_model_mapping().get(model)
 
 
 def list_models():

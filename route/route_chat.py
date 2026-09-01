@@ -50,6 +50,16 @@ async def chat_proxy(request: Request):
     if not isinstance(messages, list) or not messages:
         return error_response(400, "messages 必须是非空数组")
 
+    # 模型必须存在于映射表，不做静默回退（避免"请求 A 模型实际走了 B 模型"）
+    if not poe_api.get_bot(model):
+        return error_response(
+            404,
+            f"模型 '{model}' 未在 MODEL_MAPPING 中配置。可用模型见 GET /v1/models；"
+            f"可在 Web UI 的模型映射表中添加映射，保存后即时生效",
+            param="model",
+            code="model_not_found",
+        )
+
     stream = bool(body.get("stream", False))
     tools = body.get("tools")
     tool_choice = body.get("tool_choice")
@@ -96,10 +106,10 @@ def parse_stop(stop):
     return None
 
 
-def error_response(status_code, message, error_type="invalid_request_error"):
+def error_response(status_code, message, error_type="invalid_request_error", param=None, code=None):
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"message": message, "type": error_type, "code": None}},
+        content={"error": {"message": message, "type": error_type, "param": param, "code": code}},
     )
 
 

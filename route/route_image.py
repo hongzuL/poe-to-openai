@@ -37,6 +37,13 @@ async def image_generation(request: Request):
         return JSONResponse(status_code=400,
                             content={"error": {"message": "prompt 不能为空", "type": "invalid_request_error", "code": None}})
 
+    # 模型必须存在于映射表，不做静默回退
+    if not poe_api.get_bot(model):
+        return JSONResponse(status_code=404,
+                            content={"error": {"message": f"模型 '{model}' 未在 MODEL_MAPPING 中配置。可用模型见 GET /v1/models；"
+                                                         f"可在 Web UI 的模型映射表中添加映射，保存后即时生效",
+                                               "type": "invalid_request_error", "param": "model", "code": "model_not_found"}})
+
     api_key = get_poe_api_key()
     session = getattr(request.app.state, "http_session", None)
 

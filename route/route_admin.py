@@ -10,6 +10,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from api import poe_api
 from util.env_manager import (
     generate_custom_token,
     get_sanitized_config,
@@ -131,6 +132,59 @@ async def get_logs(lines: int = 100):
     """获取最新日志"""
     logs = get_latest_logs(lines=lines)
     return {"logs": logs}
+
+
+@router.get("/poe-models")
+async def list_poe_models():
+    """从 Poe 官方 API 拉取当前账号可用的模型列表（含定价/上下文/tools 支持），
+    供 Web UI 模型映射表选择。价格统一换算为 美元/1M tokens。"""
+    raw_cfg = read_env_raw()
+    api_key = raw_cfg.get("SYSTEM_TOKEN", "")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="未配置 Poe API key (SYSTEM_TOKEN)")
+
+    try:
+        # 复用 poe_api 的会话工厂（自动带上出站代理配置）
+        async with poe_api.create_client() as session:
+            resp = await session.get(
+                "https://api.poe.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30.0,
+            )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"请求 Poe 模型列表失败: {e}")
+
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Poe 返回 HTTP {resp.status_code}: {resp.text[:200]}",
+        )
+
+    def per_million(v):
+        try:
+            return round(float(v) * 1_000_000, 4) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    models = []
+    for m in resp.json().get("data", []):
+        arch = m.get("architecture") or {}
+        pricing = m.get("pricing") or {}
+        features = m.get("supported_features") or []
+        models.append({
+            "id": m.get("id"),
+            "name": (m.get("metadata") or {}).get("display_name") or m.get("id"),
+            "owned_by": m.get("owned_by") or "",
+            "context_length": m.get("context_length")
+                or (m.get("context_window") or {}).get("context_length"),
+            "price_in": per_million(pricing.get("prompt")),
+            "price_out": per_million(pricing.get("completion")),
+            "price_image": pricing.get("image"),  # 图像模型按张计费，保持原始美元值
+            "tools": "tools" in features,
+            "output": "+".join(arch.get("output_modalities") or ["text"]),
+        })
+    models.sort(key=lambda x: x["id"] or "")
+    return {"success": True, "count": len(models), "models": models}
 
 
 @router.post("/test-poe")

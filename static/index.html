@@ -95,7 +95,7 @@
           <i class="fa-solid fa-sliders"></i>
           配置参数 (.env)
         </button>
-        <button @click="activeTab = 'mapping'"
+        <button @click="activeTab = 'mapping'; ensurePoeModels();"
                 :class="activeTab === 'mapping' ? 'text-indigo-400 border-indigo-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
                 class="py-3 px-2 border-b-2 flex items-center gap-2 whitespace-nowrap transition">
           <i class="fa-solid fa-diagram-project"></i>
@@ -285,6 +285,11 @@
             <p class="text-xs text-slate-400 mt-0.5">客户端请求时传入的 model 参数将自动转换为对应的 Poe Bot</p>
           </div>
           <div class="flex items-center gap-2">
+            <button @click="openPoeModels" :disabled="loading.poeModels"
+                    class="px-3 py-1.5 bg-emerald-600/80 hover:bg-emerald-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition disabled:opacity-50">
+              <i class="fa-solid fa-cloud-arrow-down" :class="{'animate-pulse': loading.poeModels}"></i>
+              <span>{{ loading.poeModels ? '拉取中...' : '从 Poe 更新模型库' }}</span>
+            </button>
             <button @click="addMappingRow" class="px-3 py-1.5 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold flex items-center gap-1 transition">
               <i class="fa-solid fa-plus"></i>
               <span>新增映射</span>
@@ -295,12 +300,22 @@
           </div>
         </div>
 
+        <p v-if="!poeModels.list.length" class="text-[11px] text-slate-500 -mt-2">
+          厂商 / 价格 / 上下文 / Tools 列来自 Poe 官方模型库，首次进入本页自动拉取；也可点右上角"从 Poe 更新模型库"刷新
+        </p>
+
         <div class="overflow-x-auto">
           <table class="w-full text-left text-sm">
             <thead class="text-xs uppercase text-slate-400 bg-slate-900/50 border-b border-slate-700">
               <tr>
                 <th class="py-2.5 px-3">OpenAI 模型名 (客户端调用)</th>
                 <th class="py-2.5 px-3">对应 Poe Bot 名</th>
+                <th class="py-2.5 px-3">厂商</th>
+                <th class="py-2.5 px-3">类型</th>
+                <th class="py-2.5 px-3 text-right">输入价 ($/1M)</th>
+                <th class="py-2.5 px-3 text-right">输出价 ($/1M)</th>
+                <th class="py-2.5 px-3 text-right">上下文</th>
+                <th class="py-2.5 px-3 text-center" title="是否支持原生 tools">Tools</th>
                 <th class="py-2.5 px-3 w-16 text-center">操作</th>
               </tr>
             </thead>
@@ -313,6 +328,18 @@
                 <td class="py-2 px-3">
                   <input type="text" v-model="row.value" placeholder="例如: gpt-4o"
                          class="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono">
+                </td>
+                <td class="py-2 px-3 text-[11px] text-slate-400 whitespace-nowrap">{{ poeModelOf(row.value)?.owned_by || '-' }}</td>
+                <td class="py-2 px-3">
+                  <span v-if="poeModelOf(row.value)" class="px-1.5 py-0.5 rounded bg-slate-700/80 text-slate-300 text-[11px]">{{ poeModelOf(row.value).output }}</span>
+                  <span v-else class="text-slate-600 text-[11px]">-</span>
+                </td>
+                <td class="py-2 px-3 text-right font-mono text-[11px] text-slate-300">{{ fmtPriceIn(poeModelOf(row.value)) }}</td>
+                <td class="py-2 px-3 text-right font-mono text-[11px] text-slate-300">{{ fmtPriceOut(poeModelOf(row.value)) }}</td>
+                <td class="py-2 px-3 text-right text-[11px] text-slate-400">{{ formatContext(poeModelOf(row.value)?.context_length) }}</td>
+                <td class="py-2 px-3 text-center">
+                  <i v-if="poeModelOf(row.value)?.tools" class="fa-solid fa-wrench text-indigo-400" title="支持原生 tools"></i>
+                  <span v-else class="text-slate-600 text-[11px]">-</span>
                 </td>
                 <td class="py-2 px-3 text-center">
                   <button @click="removeMappingRow(idx)" class="text-rose-400 hover:text-rose-300 p-1">
@@ -420,6 +447,85 @@
       poe-to-openai &bull; 支持 Windows / macOS / Linux &bull; 访问端点: <code class="text-slate-400 font-mono">/v1/chat/completions</code>
     </footer>
 
+    <!-- Poe 模型库弹窗 -->
+    <div v-if="poeModels.show" class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+         @click.self="poeModels.show = false">
+      <div class="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-5xl max-h-[82vh] flex flex-col shadow-2xl">
+        <div class="flex items-center justify-between gap-3 p-4 border-b border-slate-700">
+          <h3 class="text-sm font-semibold text-indigo-400 flex items-center gap-2">
+            <i class="fa-solid fa-cloud-arrow-down"></i>
+            Poe 官方 API 当前可用模型（{{ filteredPoeModels.length }} / {{ poeModels.list.length }}）
+          </h3>
+          <div class="flex items-center gap-2">
+            <button @click="fetchPoeModels" :disabled="loading.poeModels" title="重新拉取"
+                    class="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg text-xs transition disabled:opacity-50">
+              <i class="fa-solid fa-arrows-rotate" :class="{'animate-spin': loading.poeModels}"></i>
+            </button>
+            <button @click="poeModels.show = false" class="px-2.5 py-1.5 text-slate-400 hover:text-white transition">
+              <i class="fa-solid fa-xmark"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="p-3 border-b border-slate-700/60 flex gap-2">
+          <input v-model="poeModels.search" placeholder="搜索模型 ID / 名称 / 厂商..."
+                 class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-indigo-500">
+          <select v-model="poeModels.typeFilter" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white">
+            <option value="">全部类型</option>
+            <option value="text">文本对话</option>
+            <option value="image">图像</option>
+            <option value="video">视频</option>
+            <option value="audio">音频</option>
+          </select>
+        </div>
+
+        <div class="overflow-y-auto flex-1 min-h-[200px]">
+          <table class="w-full text-left text-xs">
+            <thead class="sticky top-0 bg-slate-800 text-slate-400 uppercase text-[10px] shadow">
+              <tr>
+                <th class="py-2 px-3">模型 ID</th>
+                <th class="py-2 px-3">厂商</th>
+                <th class="py-2 px-3">类型</th>
+                <th class="py-2 px-3 text-right">输入价 ($/1M)</th>
+                <th class="py-2 px-3 text-right">输出价 ($/1M)</th>
+                <th class="py-2 px-3 text-right">上下文</th>
+                <th class="py-2 px-3 text-center" title="是否支持原生 tools">Tools</th>
+                <th class="py-2 px-3 text-center w-20">操作</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-700/50">
+              <tr v-for="m in filteredPoeModels" :key="m.id" class="hover:bg-slate-700/30">
+                <td class="py-1.5 px-3 font-mono text-emerald-300">{{ m.id }}</td>
+                <td class="py-1.5 px-3 text-slate-400">{{ m.owned_by }}</td>
+                <td class="py-1.5 px-3"><span class="px-1.5 py-0.5 rounded bg-slate-700/80 text-slate-300">{{ m.output }}</span></td>
+                <td class="py-1.5 px-3 text-right font-mono">{{ m.price_in != null ? '$' + m.price_in : (m.price_image ? '$' + m.price_image + '/张' : '-') }}</td>
+                <td class="py-1.5 px-3 text-right font-mono">{{ m.price_out != null ? '$' + m.price_out : '-' }}</td>
+                <td class="py-1.5 px-3 text-right text-slate-400">{{ formatContext(m.context_length) }}</td>
+                <td class="py-1.5 px-3 text-center">
+                  <i v-if="m.tools" class="fa-solid fa-wrench text-indigo-400" title="支持原生 tools"></i>
+                  <span v-else class="text-slate-600">-</span>
+                </td>
+                <td class="py-1.5 px-3 text-center">
+                  <button v-if="!isInMapping(m.id)" @click="addFromPoe(m)"
+                          class="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[11px] font-semibold transition">
+                    <i class="fa-solid fa-plus"></i> 添加
+                  </button>
+                  <span v-else class="text-slate-500 text-[11px]">已存在</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-if="filteredPoeModels.length === 0" class="text-center text-slate-500 py-10 text-xs">
+            {{ poeModels.list.length ? '无匹配模型' : '暂无数据，点击右上角刷新按钮拉取' }}
+          </div>
+        </div>
+
+        <div class="p-3 border-t border-slate-700/60 text-[11px] text-slate-500">
+          价格为 Poe 官方 API 计费（美元 / 1M tokens；图像模型按张）。添加后记得点击"保存映射"生效。
+        </div>
+      </div>
+    </div>
+
     <!-- Toast 通知 -->
     <div v-if="toast.show" class="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 rounded-xl shadow-2xl text-xs font-semibold text-white transition-all transform animate-bounce"
          :class="toast.type === 'error' ? 'bg-rose-600' : 'bg-indigo-600'">
@@ -477,8 +583,12 @@
           server: false,
           save: false,
           testPoe: false,
-          chat: false
+          chat: false,
+          poeModels: false
         });
+
+        // Poe 官方模型库（含价格），由"从 Poe 更新模型库"按钮拉取
+        const poeModels = ref({ show: false, list: [], search: '', typeFilter: '' });
 
         const toast = ref({ show: false, message: '', type: 'info' });
 
@@ -496,6 +606,76 @@
 
         // 以当前浏览器访问地址为准生成 Base URL，局域网访问时也正确
         const apiBaseUrl = computed(() => `${window.location.origin}/v1`);
+
+        const filteredPoeModels = computed(() => {
+          const kw = poeModels.value.search.trim().toLowerCase();
+          const tf = poeModels.value.typeFilter;
+          return poeModels.value.list.filter(m => {
+            if (tf && !(m.output || '').includes(tf)) return false;
+            if (kw && !(m.id || '').toLowerCase().includes(kw)
+                && !(m.name || '').toLowerCase().includes(kw)
+                && !(m.owned_by || '').toLowerCase().includes(kw)) return false;
+            return true;
+          });
+        });
+
+        const fetchPoeModels = async () => {
+          loading.value.poeModels = true;
+          try {
+            const res = await fetch('/api/admin/poe-models');
+            const data = await res.json();
+            if (res.ok) {
+              poeModels.value.list = data.models || [];
+              showToast(`已拉取 ${data.count} 个可用模型`);
+            } else {
+              showToast(data.detail || '拉取模型列表失败', 'error');
+            }
+          } catch (e) {
+            showToast('拉取出错: ' + e.message, 'error');
+          } finally {
+            loading.value.poeModels = false;
+          }
+        };
+
+        const openPoeModels = async () => {
+          poeModels.value.show = true;
+          if (!poeModels.value.list.length) {
+            await fetchPoeModels();
+          }
+        };
+
+        const isInMapping = (id) => mappingList.value.some(r => r.key === id || r.value === id);
+
+        const addFromPoe = (m) => {
+          mappingList.value.push({ key: m.id, value: m.id });
+          showToast(`已添加映射 ${m.id}，记得点击"保存映射"`);
+        };
+
+        const formatContext = (n) => {
+          if (!n) return '-';
+          if (n >= 1000000) return (n / 1000000).toFixed(1).replace('.0', '') + 'M';
+          if (n >= 1000) return Math.round(n / 1000) + 'k';
+          return String(n);
+        };
+
+        // 按 bot 名查 Poe 模型库条目（需先拉取过模型库），供映射表信息列展示
+        const poeModelOf = (id) => poeModels.value.list.find(x => x.id === id) || null;
+
+        const fmtPriceIn = (m) => {
+          if (!m) return '-';
+          if (m.price_in != null) return '$' + m.price_in;
+          if (m.price_image) return '$' + m.price_image + '/张';
+          return '-';
+        };
+
+        const fmtPriceOut = (m) => (m && m.price_out != null) ? '$' + m.price_out : '-';
+
+        // 首次进入映射表时自动拉取一次模型库（用于信息列展示）
+        const ensurePoeModels = () => {
+          if (!poeModels.value.list.length && !loading.value.poeModels) {
+            fetchPoeModels();
+          }
+        };
 
         const fetchStatus = async () => {
           try {
@@ -782,6 +962,8 @@
           mappingList,
           playground,
           loading,
+          poeModels,
+          filteredPoeModels,
           toast,
           poeTestResult,
           osIcon,
@@ -792,6 +974,15 @@
           removeMappingRow,
           loadPresetMapping,
           saveMapping,
+          openPoeModels,
+          fetchPoeModels,
+          isInMapping,
+          addFromPoe,
+          formatContext,
+          poeModelOf,
+          fmtPriceIn,
+          fmtPriceOut,
+          ensurePoeModels,
           generateNewToken,
           copyToClipboard,
           startServer,
