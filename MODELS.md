@@ -1,6 +1,6 @@
 # Poe 可用模型与定价一览表 (Poe Models & Pricing Catalog)
 
-> **说明**：数据来自 Poe 官方 API `/v1/models` 响应，涵盖全部 **341** 个官方及热门模型。
+> **说明**：数据来自 Poe 官方 API `/v1/models` 响应，涵盖全部 **346** 个官方及热门模型。
 > - **输入/输出定价**：换算为 **$ / 1M Tokens**（每百万 Tokens 美元价格），方便与各官方 API 直观比对。
 > - **图像生成定价**：标注为 **$/张 (Per Image)** 或单次点数。
 > - **特性标记**：🛠️ 支持工具/函数调用 (Tools) ｜ 🌐 支持联网搜索 (Web Search) ｜ 🧠 支持思考推理 (Reasoning) ｜ 👁️ 支持多模态视觉 (Vision)。
@@ -11,14 +11,14 @@
 - [🧠 Anthropic (Claude 系列)](#anthropic) （共 8 个）
 - [⚡ OpenAI (GPT / o 系列)](#openai) （共 39 个）
 - [🌐 Google (Gemini / Gemma 系列)](#google) （共 17 个）
-- [🚀 xAI (Grok 系列)](#xai) （共 14 个）
-- [🔍 DeepSeek 系列](#deepseek) （共 17 个）
+- [🚀 xAI (Grok 系列)](#xai) （共 6 个）
+- [🔍 DeepSeek 系列](#deepseek) （共 20 个）
 - [🦙 Meta (Llama 系列)](#meta) （共 5 个）
-- [🇨🇳 阿里 (Qwen / 通义千问 系列)](#阿里) （共 32 个）
-- [🌪️ Mistral AI 系列](#mistral) （共 9 个）
+- [🇨🇳 阿里 (Qwen / 通义千问 系列)](#阿里) （共 33 个）
+- [🌪️ Mistral AI 系列](#mistral) （共 7 个）
 - [🎨 图像生成模型 (Image Generation)](#图像生成模型) （共 52 个）
-- [🎵 音视频与专用工具模型 (Audio / Video / Embeddings)](#音视频与专用工具模型) （共 71 个）
-- [📦 其他主流与社区模型 (Other / Community Models)](#其他主流与社区模型) （共 77 个）
+- [🎵 音视频与专用工具模型 (Audio / Video / Embeddings)](#音视频与专用工具模型) （共 73 个）
+- [📦 其他主流与社区模型 (Other / Community Models)](#其他主流与社区模型) （共 86 个）
 - [如何在本项目中配置模型映射](#如何在本项目中配置模型映射)
 - [自动更新模型与价格数据](#自动更新模型与价格数据)
 
@@ -97,56 +97,51 @@
 | `gemini-3.5-flash-lite` | Gemini-3.5-Flash-Lite | 1M | - | $0.303 | $2.53 | $0.030 | 🌐 🧠 👁️ | Google’s fastest, most cost-efficient Gemini 3.5 model, b... |
 | `gemini-3.6-flash` | Gemini-3.6-Flash | 1M | - | $0.758 | $3.79 | $0.076 | 🌐 🧠 👁️ | Google’s token-efficient workhorse model for coding, know... |
 | `gemini-3.7-flash` | Gemini-3.7-Flash | 1M | - | $0.758 | $3.79 | $0.076 | 🌐 🧠 👁️ | Google’s most intelligent workhorse model for coding and ... |
-| `gemma-3-27b` | Gemma-3-27B | - | - | - | - | - | 🛠️ 👁️ | Gemma 3 introduces multimodality, supporting vision-langu... |
+| `gemma-3-27b` | Gemma-3-27B | 127k | - | - | - | - | 🛠️ 👁️ | Gemma 3 introduces multimodality, supporting vision-langu... |
 | `gemma-4-26b-a4b` | Gemma-4-26B-A4B | - | - | $0.131 | $0.404 | - | 👁️ | Gemma 4 26B A4B is built for developers who need scalable... |
-| `gemma-4-26b-a4b-el` | Gemma-4-26B-A4B-EL | - | - | $0.051 | $0.293 | $0.025 | 🛠️ 👁️ | Gemma 4 26B A4B is a Google open multimodal model with 25... |
+| `gemma-4-26b-a4b-el` | Gemma-4-26B-A4B-EL | 262k | - | $0.051 | $0.293 | $0.025 | 🛠️ 👁️ | Gemma 4 26B A4B is a Google open multimodal model with 25... |
 | `gemma-4-31b` | Gemma-4-31B | 262k | 8k | - | - | - | 🛠️ 👁️ | Google's most capable open model, delivering frontier-cla... |
 | `gemma-4-31b-n` | Gemma-4-31B-N | - | - | $0.141 | $0.404 | - | 👁️ | Gemma 4 31B is engineered to tackle the most demanding en... |
 | `gemma-4-31b-t` | Gemma-4-31B-T | - | - | - | - | - | - | Gemma 4 models are designed to deliver frontier-level per... |
 | `pearl-gemma-4-31b` | Pearl-Gemma-4-31B | - | - | - | - | - | - | Gemma 4 31B-it-Pearl is Pearl Research Labs' instruction-... |
 
 
-## <a id='xai'></a>🚀 xAI (Grok 系列) (共 14 个)
+## <a id='xai'></a>🚀 xAI (Grok 系列) (共 6 个)
 
 | Poe Bot ID | 显示名称 | 上下文 | 最大输出 | 输入价格 / 1M | 输出价格 / 1M | 缓存读取 / 1M | 特性 | 描述 |
 |---|---|---|---|---|---|---|---|---|
-| `grok-3` | Grok-3 | 131k | - | $3.03 | $15.15 | $0.758 | 🛠️ | xAI's February 2025 flagship release representing nearly ... |
-| `grok-3-mini` | Grok-3-Mini | 131k | - | $0.303 | $0.505 | $0.076 | 🛠️ 🧠 | xAI's February 2025 release with strong performance acros... |
-| `grok-4` | Grok-4 | 256k | - | $3.03 | $15.15 | $0.758 | 🛠️ 👁️ | Grok 4 is xAI's latest and most intelligent language mode... |
-| `grok-4-fast-non-reasoning` | Grok-4-Fast-Non-Reasoning | 2M | - | $0.202 | $0.505 | $0.051 | 🛠️ 👁️ | Grok 4 Fast Non-Reasoning is designed for fast, efficient... |
-| `grok-4-fast-reasoning` | Grok-4-Fast-Reasoning | 2M | - | $0.202 | $0.505 | $0.051 | 🛠️ 👁️ | Grok 4 Fast Reasoning delivers exceptional performance fo... |
-| `grok-4.1-fast-non-reasoning` | Grok-4.1-Fast-Non-Reasoning | 2M | - | $0.202 | $0.505 | $0.051 | 🛠️ 👁️ | Grok-4.1-Fast-Non-Reasoning is a streamlined companion to... |
-| `grok-4.1-fast-reasoning` | Grok-4.1-Fast-Reasoning | 2M | - | $0.202 | $0.505 | $0.051 | 🛠️ 👁️ | Grok-4.1-Fast-Reasoning is a high-performance version of ... |
 | `grok-4.20-multi-agent` | Grok-4.20-Multi-Agent | 128k | - | $1.26 | $2.53 | $0.202 | 🛠️ 🧠 👁️ | Realtime Multi-agent Research enables Grok to orchestrate... |
 | `grok-4.3` | Grok-4.3 | 1M | - | $1.26 | $2.53 | $0.202 | 🛠️ 👁️ | Grok-4.3 is a reasoning model from xAI designed for agent... |
 | `grok-4.5` | Grok-4.5 | 500k | - | $2.02 | $6.06 | $0.303 | 🛠️ 🌐 🧠 👁️ | SpaceXAI's smartest model with frontier performance on co... |
 | `grok-4.6` | Grok-4.6 | 500k | - | $2.02 | $6.06 | $0.505 | 🛠️ 🌐 🧠 👁️ | xAI’s frontier model for long-running agents, interactive... |
-| `grok-code-fast-1` | Grok-Code-Fast-1 | 256k | - | $0.202 | $1.52 | $0.020 | 🛠️ | Grok-Code-Fast-1 from xAI is a high-performance, cost-eff... |
 | `grok-imagine-image-2` | Grok-Imagine-Image-2 | - | - | - | - | - | - | Grok Imagine Image 2.0 generates images from a text promp... |
 | `grok-imgn-video-1.5` | Grok-Imgn-Video-1.5 | - | - | - | - | - | - | Grok Imagine Video 1.5 supports text-to-video, image-to-v... |
 
 
-## <a id='deepseek'></a>🔍 DeepSeek 系列 (共 17 个)
+## <a id='deepseek'></a>🔍 DeepSeek 系列 (共 20 个)
 
 | Poe Bot ID | 显示名称 | 上下文 | 最大输出 | 输入价格 / 1M | 输出价格 / 1M | 缓存读取 / 1M | 特性 | 描述 |
 |---|---|---|---|---|---|---|---|---|
 | `deepseek-r1-di` | DeepSeek-R1-DI | 64k | - | - | - | - | - | Top open-source reasoning LLM rivaling OpenAI's o1 model;... |
 | `deepseek-r1-n` | DeepSeek-R1-N | - | - | - | - | - | 🛠️ | DeepSeek R1 0528 is the latest open-source model released... |
 | `deepseek-r1-turbo-di` | DeepSeek-R1-Turbo-DI | 32k | - | - | - | - | - | Top open-source reasoning LLM rivaling OpenAI's o1 model;... |
-| `deepseek-v3` | DeepSeek-V3 | - | - | $0.273 | $1.13 | $0.136 | 🛠️ | DeepSeek V3 is DeepSeek's mixture-of-experts flagship cha... |
+| `deepseek-v3` | DeepSeek-V3 | 163k | - | $0.273 | $1.13 | $0.136 | 🛠️ | DeepSeek V3 is DeepSeek's mixture-of-experts flagship cha... |
 | `deepseek-v3-di` | DeepSeek-V3-DI | 64k | - | - | - | - | - | Deepseek-v3 – the new top open-source LLM. Achieves state... |
 | `deepseek-v3-turbo-di` | DeepSeek-V3-Turbo-DI | 32k | - | - | - | - | - | Deepseek-v3 – the new top open-source LLM. Achieves state... |
-| `deepseek-v3.1` | DeepSeek-v3.1 | - | - | $0.212 | $0.798 | - | 🛠️ | DeepSeek V3.1 is a long-context model for coding, tool us... |
-| `deepseek-v3.1-terminus` | DeepSeek-V3.1-Terminus | - | - | $0.273 | $1.01 | $0.136 | 🛠️ | DeepSeek V3.1 Terminus is DeepSeek's refined V3.1 model f... |
-| `deepseek-v3.2` | DeepSeek-V3.2 | - | - | $0.283 | $0.424 | $0.136 | 🛠️ | DeepSeek V3.2 is DeepSeek's efficient model for long-cont... |
-| `deepseek-v3.2-el` | DeepSeek-V3.2-EL | - | - | $0.576 | $1.73 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
+| `deepseek-v3.1` | DeepSeek-v3.1 | 164k | - | $0.212 | $0.798 | - | 🛠️ | DeepSeek V3.1 is a long-context model for coding, tool us... |
+| `deepseek-v3.1-terminus` | DeepSeek-V3.1-Terminus | 131k | - | $0.273 | $1.01 | $0.136 | 🛠️ | DeepSeek V3.1 Terminus is DeepSeek's refined V3.1 model f... |
+| `deepseek-v3.2` | DeepSeek-V3.2 | 128k | - | $0.283 | $0.424 | $0.136 | 🛠️ | DeepSeek V3.2 is DeepSeek's efficient model for long-cont... |
+| `deepseek-v3.2-el` | DeepSeek-V3.2-EL | 131k | - | $0.576 | $1.73 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
 | `deepseek-v3.2-exp` | DeepSeek-V3.2-Exp | 160k | - | - | - | - | 🛠️ | DeepSeek-V3.2-Exp is an experimental model introducing th... |
-| `deepseek-v4-flash` | DeepSeek-V4-Flash | - | - | $0.141 | $0.283 | $0.028 | 🛠️ | DeepSeek V4 Flash is a text model in DeepSeek’s V4 family... |
-| `deepseek-v4-flash-e` | DeepSeek-V4-Flash-E | - | - | $0.202 | $0.404 | - | 🛠️ | DeepSeek V4 Flash is a highly efficient lightweight Mixtu... |
-| `deepseek-v4-pro` | DeepSeek-V4-Pro | - | - | $1.76 | $3.52 | $0.146 | 🛠️ | DeepSeek V4 Pro is DeepSeek’s text model with long-contex... |
-| `deepseek-v4-pro-0813-el` | DeepSeek-V4-Pro-0813-EL | - | - | $1.33 | $4.00 | - | 🛠️ | DeepSeek V4 Pro 0813 is the official DeepSeek Pro release... |
-| `deepseek-v4-pro-e` | DeepSeek-V4-Pro-E | - | - | $2.42 | $4.85 | - | 🛠️ | DeepSeek V4 Pro is a flagship Mixture-of-Experts large la... |
+| `deepseek-v4-0731` | DeepSeek-V4-0731 | - | - | $0.141 | $0.283 | $0.028 | 🛠️ | DeepSeek V4 Flash 0731 is a sparse mixture-of-experts mod... |
+| `deepseek-v4-flash` | DeepSeek-V4-Flash | 1M | - | $0.141 | $0.283 | $0.028 | 🛠️ | DeepSeek V4 Flash is a text model in DeepSeek’s V4 family... |
+| `deepseek-v4-flash-e` | DeepSeek-V4-Flash-E | 1M | - | $0.202 | $0.404 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
+| `deepseek-v4-pro` | DeepSeek-V4-Pro | 1M | - | $1.76 | $3.52 | $0.146 | 🛠️ | DeepSeek V4 Pro is DeepSeek’s text model with long-contex... |
+| `deepseek-v4-pro-0813` | DeepSeek-V4-Pro-0813 | - | - | $1.33 | $4.00 | $0.444 | 🛠️ | deepseek/deepseek-v4-pro-0813 powered by Novita AI  File ... |
+| `deepseek-v4-pro-0813-el` | DeepSeek-V4-Pro-0813-EL | 1M | - | $1.33 | $4.00 | - | 🛠️ | DeepSeek V4 Pro 0813 is the official DeepSeek Pro release... |
+| `deepseek-v4-pro-e` | DeepSeek-V4-Pro-E | 1M | - | $2.42 | $4.85 | - | 🛠️ | DeepSeek V4 Pro is a flagship Mixture-of-Experts large la... |
 | `deepseek-v4-pro-t` | DeepSeek-V4-Pro-T | - | - | - | - | - | - | DeepSeek V4 Pro is DeepSeek's 1.6T parameter (49B activat... |
+| `deepseek-vision-exp` | Deepseek-vision-exp | - | - | $0.444 | $1.33 | $0.028 | 🛠️ 👁️ | DeepSeek V4 Flash Vision Exp is an experimental vision-en... |
 
 
 ## <a id='meta'></a>🦙 Meta (Llama 系列) (共 5 个)
@@ -157,10 +152,10 @@
 | `llama-3.1-8b-fp16` | Llama-3.1-8B-FP16 | 131k | - | - | - | - | - | The smallest and fastest member of the Llama 3.1 family, ... |
 | `llama-3.3-70b-n` | Llama-3.3-70B-N | - | - | - | - | - | 🛠️ | The Meta Llama 3.3 multilingual large language model (LLM... |
 | `llama-3.3-70b-t` | Llama-3.3-70B-T | 131k | - | - | - | - | - | Llama 3.3 70B – with similar performance as Llama 3.1 405... |
-| `muse-spark-1-1` | Muse-Spark-1.1 | - | - | $1.26 | $4.29 | $0.151 | 🛠️ 🌐 🧠 👁️ | Muse Spark 1.1 is the first model in Meta Superintelligen... |
+| `muse-spark-1-1` | Muse-Spark-1.1 | 1M | - | $1.26 | $4.29 | $0.151 | 🛠️ 🌐 🧠 👁️ | Muse Spark 1.1 is the first model in Meta Superintelligen... |
 
 
-## <a id='阿里'></a>🇨🇳 阿里 (Qwen / 通义千问 系列) (共 32 个)
+## <a id='阿里'></a>🇨🇳 阿里 (Qwen / 通义千问 系列) (共 33 个)
 
 | Poe Bot ID | 显示名称 | 上下文 | 最大输出 | 输入价格 / 1M | 输出价格 / 1M | 缓存读取 / 1M | 特性 | 描述 |
 |---|---|---|---|---|---|---|---|---|
@@ -172,43 +167,42 @@
 | `qwen3-235b-a22b-n` | Qwen3-235B-A22B-N | - | - | - | - | - | 🛠️ | Qwen3-235B-A22B-Instruct-2507 is a multilingual, instruct... |
 | `qwen3-coder-480b-n` | Qwen3-Coder-480B-N | - | - | - | - | - | 🛠️ | Qwen3-Coder-480B-A35B-Instruct is a cutting-edge open cod... |
 | `qwen3-coder-next-n` | Qwen3-Coder-Next-N | - | - | $0.202 | $1.52 | - | 🛠️ | Qwen3-Coder-Next is an open-weight language model specifi... |
-| `qwen3-max-el` | Qwen3-Max-EL | - | - | $1.09 | $5.58 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
+| `qwen3-max-el` | Qwen3-Max-EL | 256k | - | $1.09 | $5.58 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
 | `qwen3-max-n` | Qwen3-Max-N | - | - | $2.13 | $8.54 | - | 🛠️ | Qwen/qwen3-max, Enhanced with specialized upgrades in age... |
-| `qwen3-max-preview-el` | Qwen3-Max-Preview-EL | - | - | $1.09 | $4.85 | - | - | This model is retiring on 2026-10-10. Please switch to: h... |
-| `qwen3-max-thinking-el` | Qwen3-Max-Thinking-EL | - | - | $1.09 | $5.58 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
+| `qwen3-max-preview-el` | Qwen3-Max-Preview-EL | 252k | - | $1.09 | $4.85 | - | - | This model is retiring on 2026-10-10. Please switch to: h... |
+| `qwen3-max-thinking-el` | Qwen3-Max-Thinking-EL | 252k | - | $1.09 | $5.58 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
 | `qwen3-next-80b` | Qwen3-Next-80B | - | - | $0.151 | $1.52 | - | 🛠️ | Qwen3-Next uses a highly sparse MoE design: 80B total par... |
 | `qwen3-next-80b-think` | Qwen3-Next-80B-Think | - | - | $0.151 | $1.52 | - | 🛠️ | Qwen3-Next uses a highly sparse MoE design: 80B total par... |
 | `qwen3-vl-235b-a22b-i` | Qwen3-VL-235B-A22B-I | - | - | $0.303 | $1.52 | - | 🛠️ 👁️ | qwen/qwen3-vl-235b-a22b-instruct powered by Novita AI  Fi... |
 | `qwen3-vl-235b-a22b-t` | Qwen3-VL-235B-A22B-T | - | - | $0.990 | $3.99 | - | 🛠️ 👁️ | qwen/qwen3-vl-235b-a22b-thinking powered by Novita AI  Fi... |
-| `qwen3.5-397b-a17b` | Qwen3.5-397B-A17B | - | - | $0.606 | $3.64 | - | 🛠️ 👁️ | The Qwen3.5 series 397B-A17B native vision-language model... |
-| `qwen3.5-4b-el` | Qwen3.5-4B-EL | - | - | $0.040 | $0.071 | $0.020 | 🛠️ 👁️ | Qwen3.5 4B is a low-cost multimodal reasoning model with ... |
-| `qwen3.5-9b-el` | Qwen3.5-9B-EL | - | - | $0.091 | $0.131 | $0.045 | 🛠️ 👁️ | Qwen3.5 9B is a compact multimodal reasoning model with 2... |
-| `qwen3.5-flash-el` | Qwen3.5-Flash-EL | - | - | $0.091 | $0.372 | - | 🛠️ 👁️ | The Qwen3.5 native vision-language Flash models are built... |
+| `qwen3.5-397b-a17b` | Qwen3.5-397B-A17B | 262k | - | $0.606 | $3.64 | - | 🛠️ 👁️ | The Qwen3.5 series 397B-A17B native vision-language model... |
+| `qwen3.5-4b-el` | Qwen3.5-4B-EL | 262k | - | $0.040 | $0.071 | $0.020 | 🛠️ 👁️ | Qwen3.5 4B is a low-cost multimodal reasoning model with ... |
+| `qwen3.5-9b-el` | Qwen3.5-9B-EL | 262k | - | $0.091 | $0.131 | $0.045 | 🛠️ 👁️ | Qwen3.5 9B is a compact multimodal reasoning model with 2... |
+| `qwen3.5-flash-el` | Qwen3.5-Flash-EL | 1M | - | $0.091 | $0.372 | - | 🛠️ 👁️ | The Qwen3.5 native vision-language Flash models are built... |
 | `qwen3.5-omni-flash` | Qwen3.5-Omni-Flash | - | - | - | - | - | - | Qwen3.5-Omni Flash is the cost-efficient variant of Qwen'... |
 | `qwen3.5-omni-plus` | Qwen3.5-Omni-Plus | - | - | - | - | - | - | Qwen3.5-Omni Plus is the flagship variant of Qwen's lates... |
-| `qwen3.5-plus-el` | Qwen3.5-Plus-EL | - | - | $0.364 | $2.23 | - | 🛠️ 👁️ | Qwen3.5-Plus is a state-of-the-art multimodal model featu... |
-| `qwen3.6-max-preview` | Qwen3.6-Max-Preview | - | - | $1.31 | $7.88 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
-| `qwen3.6-plus` | Qwen3.6-Plus | - | - | $0.505 | $3.03 | $0.101 | 🛠️ 👁️ | Qwen 3.6 Plus is Alibaba's 1M-context vision and reasonin... |
+| `qwen3.5-plus-el` | Qwen3.5-Plus-EL | 1M | - | $0.364 | $2.23 | - | 🛠️ 👁️ | Qwen3.5-Plus is a state-of-the-art multimodal model featu... |
+| `qwen3.6-max-preview` | Qwen3.6-Max-Preview | 256k | - | $1.31 | $7.88 | - | 🛠️ | This model is retiring on 2026-10-10. Please switch to: h... |
 | `qwen3.6-plus-t` | Qwen3.6-Plus-T | - | - | - | - | - | - | Qwen3.6-Plus is Qwen's multimodal agentic model built on ... |
-| `qwen3.7-flash-el` | Qwen3.7-Flash-EL | - | - | $0.030 | $0.131 | $0.0061 | 🛠️ 👁️ | Qwen3.7 Flash is a fast vision-language model for text, i... |
-| `qwen3.7-max-el` | Qwen3.7-Max-EL | - | - | $2.53 | $7.58 | - | 🛠️ | Qwen3.7 Max is a next‑generation flagship model designed ... |
+| `qwen3.7-flash-el` | Qwen3.7-Flash-EL | 1M | - | $0.030 | $0.131 | $0.0061 | 🛠️ 👁️ | Qwen3.7 Flash is a fast vision-language model for text, i... |
+| `qwen3.7-max-el` | Qwen3.7-Max-EL | 1M | - | $2.53 | $7.58 | - | 🛠️ | Qwen3.7 Max is a next‑generation flagship model designed ... |
 | `qwen3.7-max-t` | Qwen3.7-Max-T | - | - | - | - | - | - | Qwen3.7-Max is Qwen's flagship proprietary model built fo... |
-| `qwen3.7-plus` | Qwen3.7-Plus | - | - | $0.404 | $1.62 | $0.081 | 🛠️ 👁️ | Qwen 3.7 Plus is Alibaba's multimodal model for reasoning... |
-| `qwen3.8-27b-el` | Qwen3.8-27B-EL | - | - | - | - | - | 🛠️ 🧠 👁️ | Qwen3.8 27B is Alibaba's open multimodal reasoner. It acc... |
-| `qwen3.8-max-el` | Qwen3.8-Max-EL | - | - | $2.02 | $6.06 | - | 🛠️ 👁️ | Qwen3.8 Max is Alibaba's flagship Qwen3.8 model, a trilli... |
+| `qwen3.8-2.4t-a95b-n` | Qwen3.8-2.4T-A95B-N | - | - | $2.02 | $6.06 | $0.253 | 🛠️ | Qwen3.8 2.4T A95B is an open-weight sparse mixture-of-exp... |
+| `qwen3.8-27b` | Qwen3.8-27b | - | - | - | - | - | 🛠️ 👁️ | qwen/qwen3.8-27b powered by Novita AI  File Support: Text... |
+| `qwen3.8-27b-el` | Qwen3.8-27B-EL | 262k | - | $0.172 | $0.505 | $0.081 | 🛠️ 🧠 👁️ | Qwen3.8 27B is Alibaba's open multimodal reasoner. It acc... |
+| `qwen3.8-flash-el` | Qwen3.8-Flash-EL | 1M | - | $0.162 | $0.475 | - | 🛠️ 👁️ | Qwen3.8 Flash is Alibaba's fast multimodal Qwen3.8 model,... |
+| `qwen3.8-max-el` | Qwen3.8-Max-EL | 1M | - | $2.02 | $6.06 | - | 🛠️ 👁️ | Qwen3.8 Max is Alibaba's flagship Qwen3.8 model, a trilli... |
 
 
-## <a id='mistral'></a>🌪️ Mistral AI 系列 (共 9 个)
+## <a id='mistral'></a>🌪️ Mistral AI 系列 (共 7 个)
 
 | Poe Bot ID | 显示名称 | 上下文 | 最大输出 | 输入价格 / 1M | 输出价格 / 1M | 缓存读取 / 1M | 特性 | 描述 |
 |---|---|---|---|---|---|---|---|---|
 | `mistral-7b-v0.3-di` | Mistral-7B-v0.3-DI | 32k | - | - | - | - | - | Mistral Instruct 7B v0.3 from Mistral AI.  All data you p... |
 | `mistral-large-2` | Mistral-Large-2 | 128k | 4k | $3.03 | $9.09 | - | 👁️ | Mistral's latest text generation model (Mistral-Large-240... |
 | `mistral-medium` | Mistral-Medium | 128k | 4k | $2.73 | $8.18 | - | 👁️ | Mistral AI's medium-sized model. Supports a context windo... |
-| `mistral-medium-3` | Mistral-Medium-3 | - | - | - | - | - | 🛠️ 👁️ | This model is retiring on 2026-08-31. Please switch to: h... |
-| `mistral-medium-3.1` | Mistral-Medium-3.1 | - | - | $0.525 | $2.63 | - | 🛠️ 👁️ | This model is retiring on 2026-08-31. Please switch to: h... |
 | `mistral-small-3` | Mistral-Small-3 | 128k | 4k | $0.101 | $0.303 | - | 👁️ | Mistral Small 3 is a pre-trained and instructed model cat... |
-| `mistral-small-3.1` | Mistral-Small-3.1 | - | - | - | - | - | 🛠️ 👁️ | Mistral Small 3.1 24B Instruct is an upgraded variant of ... |
+| `mistral-small-3.1` | Mistral-Small-3.1 | 127k | - | - | - | - | 🛠️ 👁️ | Mistral Small 3.1 24B Instruct is an upgraded variant of ... |
 | `mistral-small-4` | Mistral-Small-4 | - | - | - | - | - | 🧠 | Mistral Small 4 is a powerful hybrid model capable of act... |
 | `mixtral8x22b-inst-fw` | Mixtral8x22b-Inst-FW | 65k | - | - | - | - | - | Mixtral 8x22B Mixture-of-Experts instruct model from Mist... |
 
@@ -271,19 +265,20 @@
 | `z-image-lightning` | Z-Image-Lightning | fal | - | - | - | Super-fast endpoint for Z-Image Turbo, hosted by fal.ai. Excels at portrait p... |
 
 
-## <a id='音视频与专用工具模型'></a>🎵 音视频与专用工具模型 (Audio / Video / Embeddings) (共 71 个)
+## <a id='音视频与专用工具模型'></a>🎵 音视频与专用工具模型 (Audio / Video / Embeddings) (共 73 个)
 
 | Poe Bot ID | 显示名称 | 上下文 | 最大输出 | 输入价格 / 1M | 输出价格 / 1M | 缓存读取 / 1M | 特性 | 描述 |
 |---|---|---|---|---|---|---|---|---|
 | `amazon-nova-reel-1.1` | Amazon-Nova-Reel-1.1 | - | - | - | - | - | - | Amazon Nova Reel 1.1 is an advanced AI video generation m... |
 | `cartesia-ink-whisper` | Cartesia-Ink-Whisper | - | - | - | - | - | - | Transcribe audio files using Speech-to-Text with the Cart... |
 | `elevenlabs-music` | ElevenLabs-Music | 2k | - | - | - | - | - | The ElevenLabs music model is a generative AI system desi... |
-| `elevenlabs-music-v2` | ElevenLabs-Music-v2 | - | - | - | - | - | - | ElevenLabs Music v2 is an advanced AI music generation mo... |
+| `elevenlabs-music-v2` | ElevenLabs-Music-v2 | 2k | - | - | - | - | - | ElevenLabs Music v2 is an advanced AI music generation mo... |
 | `elevenlabs-v2.5-turbo` | ElevenLabs-v2.5-Turbo | 128k | - | - | - | - | - | ElevenLabs' leading text-to-speech technology converts yo... |
 | `elevenlabs-v3` | ElevenLabs-v3 | 128k | - | - | - | - | - | ElevenLabs v3 is a cutting-edge text-to-speech model that... |
 | `gemini-2.5-flash-tts` | Gemini-2.5-Flash-TTS | - | - | - | - | - | - | Gemini‑2.5‑Flash‑TTS is Google’s low‐latency text‑to‑spee... |
 | `gemini-2.5-pro-tts` | Gemini-2.5-Pro-TTS | - | - | - | - | - | - | Gemini‑2.5‑Pro‑TTS is Google’s highest‑quality text‑to‑sp... |
 | `gemini-3.1-flash-tts` | Gemini-3.1-Flash-TTS | - | - | - | - | - | - | Gemini 3.1 Flash TTS is Google’s most controllable text-t... |
+| `gemini-omni-1.1-flash` | Gemini-Omni-1.1-Flash | 131k | - | $1.52 | $9.09 | - | 👁️ | Google's Gemini Omni 1.1 Flash brings Gemini's multimodal... |
 | `gemini-omni-flash` | Gemini-Omni-Flash | 1M | - | $1.52 | $9.09 | - | 👁️ | Google's Gemini Omni Flash is a high-quality, cost-effici... |
 | `gpt-audio` | GPT-Audio | - | - | - | - | - | - | OpenAI's gpt-audio model, brought to Poe as a server bot!... |
 | `gpt-audio-1.5` | GPT-Audio-1.5 | - | - | - | - | - | - | OpenAI's gpt-audio-1.5 model, brought to Poe as a server ... |
@@ -344,11 +339,12 @@
 | `wan-2.5` | Wan-2.5 | - | - | - | - | - | 👁️ | Wan-2.5 Video Generation bot. Has text-to-video and image... |
 | `wan-2.6` | Wan-2.6 | - | - | - | - | - | - | Wan 2.6 is Alibaba’s multimodal video generation model bu... |
 | `wan-2.7` | Wan-2.7 | - | - | - | - | - | - | Wan 2.7 is Alibaba's latest multimodal video generation m... |
+| `wan-3.0` | Wan-3.0 | - | - | - | - | - | - | Wan 3.0 generates video clips of 2 to 30 seconds with syn... |
 | `wan-animate` | Wan-Animate | - | - | - | - | - | - | Wan Animate takes in an image and a video to generate ano... |
 | `whisper-v3-large-t` | Whisper-V3-Large-T | - | - | - | - | - | - | Whisper v3 Large is a state-of-the-art automatic speech r... |
 
 
-## <a id='其他主流与社区模型'></a>📦 其他主流与社区模型 (Other / Community Models) (共 77 个)
+## <a id='其他主流与社区模型'></a>📦 其他主流与社区模型 (Other / Community Models) (共 86 个)
 
 | Poe Bot ID | 显示名称 | 上下文 | 最大输出 | 输入价格 / 1M | 输出价格 / 1M | 缓存读取 / 1M | 特性 | 描述 |
 |---|---|---|---|---|---|---|---|---|
@@ -358,47 +354,55 @@
 | `code-saver` | Code-Saver | - | - | - | - | - | - | A system bot that handles Poe scripts in chat. |
 | `deep-ai-search` | Deep-AI-Search | - | - | - | - | - | - | Deep search engine that integrates Brave AI with real-tim... |
 | `deepgram-nova-3` | Deepgram-Nova-3 | - | - | - | - | - | - | Transcribe audio files using Speech-to-Text technology wi... |
-| `deepreasoning` | DeepReasoning | - | - | $5.05 | $10.10 | - | - | DeepReasoning (previously DeepClaude) is a high-performan... |
-| `ds-v4-flash-0731-el` | DS-V4-Flash-0731-EL | - | - | $0.428 | $1.28 | - | 🛠️ | DeepSeek V4 Flash 0731 is a 284B MoE reasoning model with... |
-| `exa-answer` | Exa-Answer | - | - | - | - | - | - | Get a quick LLM-style answer to a question informed by Ex... |
+| `deepreasoning` | DeepReasoning | 100k | - | $5.05 | $10.10 | - | - | DeepReasoning (previously DeepClaude) is a high-performan... |
+| `ds-v4-flash-0731-el` | DS-V4-Flash-0731-EL | 1M | - | $0.428 | $1.28 | - | 🛠️ | DeepSeek V4 Flash 0731 is a 284B MoE reasoning model with... |
+| `exa-answer` | Exa-Answer | 32k | - | - | - | - | - | Get a quick LLM-style answer to a question informed by Ex... |
 | `exa-search` | Exa-Search | - | - | - | - | - | - | Utilize Exa's technology for searching web pages, finding... |
-| `fugu-ultra-v1.0-el` | Fugu-Ultra-v1.0-EL | - | - | $7.58 | $45.45 | $1.52 | 🛠️ 🧠 👁️ | Fugu Ultra v1.0 is Sakana AI's multi-agent conductor: it ... |
-| `fugu-ultra-v1.1-el` | Fugu-Ultra-v1.1-EL | - | - | $5.05 | $30.30 | $0.505 | 🛠️ 🧠 👁️ | Fugu Ultra v1.1 is Sakana AI's multi-agent conductor with... |
-| `glm-4.6` | GLM-4.6 | - | - | $0.606 | $2.22 | $0.111 | 🛠️ | Z.ai GLM 4.6 is a coding-focused model for large codebase... |
+| `fugu-ultra-v1.0-el` | Fugu-Ultra-v1.0-EL | 1M | - | $7.58 | $45.45 | $1.52 | 🛠️ 🧠 👁️ | Fugu Ultra v1.0 is Sakana AI's multi-agent conductor: it ... |
+| `fugu-ultra-v1.1-el` | Fugu-Ultra-v1.1-EL | 1M | - | $5.05 | $30.30 | $0.505 | 🛠️ 🧠 👁️ | Fugu Ultra v1.1 is Sakana AI's multi-agent conductor with... |
+| `glm-4.6` | GLM-4.6 | 204k | - | $0.606 | $2.22 | $0.111 | 🛠️ | Z.ai GLM 4.6 is a coding-focused model for large codebase... |
 | `glm-4.6v-n` | GLM-4.6V-N | - | - | $0.303 | $0.909 | $0.056 | 🛠️ 👁️ | GLM-4.6V represents a significant multimodal advancement ... |
-| `glm-4.7` | GLM-4.7 | - | - | $0.606 | $2.22 | $0.121 | 🛠️ | Z.ai GLM 4.7 improves coding, tool use, and multi-step re... |
+| `glm-4.7` | GLM-4.7 | 200k | - | $0.606 | $2.22 | $0.121 | 🛠️ | Z.ai GLM 4.7 improves coding, tool use, and multi-step re... |
 | `glm-4.7-flash-n` | GLM-4.7-Flash-N | - | - | $0.071 | $0.404 | $0.010 | 🛠️ | GLM-4.7-Flash, a state-of-the-art model in the 30B class,... |
-| `glm-5` | GLM-5 | - | - | $1.01 | $3.23 | $0.202 | 🛠️ | Z.ai GLM 5 supports agentic coding, autonomous tool use, ... |
-| `glm-5.1` | GLM-5.1 | - | - | $1.41 | $4.44 | $0.263 | 🛠️ | Z.ai GLM 5.1 is built for long-horizon autonomous coding:... |
-| `glm-5.2` | GLM-5.2 | - | - | $1.52 | $4.55 | $0.303 | 🛠️ | GLM 5.2 is Z.AI's flagship open-weight model for long-hor... |
+| `glm-5` | GLM-5 | 202k | - | $1.01 | $3.23 | $0.202 | 🛠️ | Z.ai GLM 5 supports agentic coding, autonomous tool use, ... |
+| `glm-5.1` | GLM-5.1 | 202k | - | $1.41 | $4.44 | $0.263 | 🛠️ | Z.ai GLM 5.1 is built for long-horizon autonomous coding:... |
+| `glm-5.2` | GLM-5.2 | 256k | - | $1.52 | $4.55 | $0.303 | 🛠️ | GLM 5.2 is Z.AI's flagship open-weight model for long-hor... |
+| `glm-5.2-n` | GLM-5.2-N | - | - | $1.41 | $4.44 | $0.263 | 🛠️ | GLM-5.2 is Z.AI's latest flagship model, meticulously eng... |
+| `glm-5.3` | GLM-5.3 | - | - | $1.41 | $4.44 | $0.263 | 🛠️ | GLM-5.3 is Z.ai’s latest flagship model, delivering compr... |
+| `glm-5.3-el` | GLM-5.3-EL | 1M | - | $1.41 | $4.44 | - | 🛠️ 🧠 | GLM 5.3 is Z.ai's flagship coding and agentic model, buil... |
+| `glm-5.3-flash` | GLM-5.3-flash | - | - | $0.151 | $0.505 | $0.030 | 🛠️ 👁️ | GLM-5.3-Flash is a native multimodal model from Z.ai. It ... |
+| `glm-5.3-flash-el` | GLM-5.3-Flash-EL | 1M | - | $0.076 | $0.253 | - | 🛠️ 🧠 👁️ | GLM 5.3 Flash is Z.ai's natively multimodal flash model, ... |
 | `happyhorse-1.0-el` | HappyHorse-1.0-EL | - | - | - | - | - | - | HappyHorse 1.0 is a video generation model, capable of cr... |
 | `happyhorse-1.1` | HappyHorse-1.1 | - | - | - | - | - | - | HappyHorse 1.1, from Alibaba, supports text-to-video, ima... |
-| `hy3` | Hy3 | - | - | $0.141 | $0.586 | $0.035 | 🛠️ | Tencent Hy3 is a reasoning model for coding, tool use, an... |
+| `hy3` | Hy3 | 262k | - | $0.141 | $0.586 | $0.035 | 🛠️ | Tencent Hy3 is a reasoning model for coding, tool use, an... |
+| `hy3-n` | Hy3-N | - | - | - | - | - | 🛠️ | Built for real-world business scenarios, Hy3 features a 2... |
 | `interpreter` | Interpreter | - | - | - | - | - | 👁️ | Interpreter for Poe Python |
-| `kimi-k2-thinking` | Kimi-K2-Thinking | - | - | $0.475 | $2.02 | $0.142 | 🛠️ | Moonshot AI Kimi K2 Thinking is a reasoning model for lon... |
-| `kimi-k2.5` | Kimi-K2.5 | - | - | $0.606 | $3.03 | $0.101 | 🛠️ 👁️ | Moonshot AI Kimi K2.5 is a multimodal model for visual an... |
-| `kimi-k2.6` | Kimi-K2.6 | - | - | $0.960 | $4.04 | $0.162 | 🛠️ 👁️ | Moonshot AI Kimi K2.6 is a model for long-horizon coding,... |
-| `kimi-k2.7-code` | Kimi-K2.7-Code | - | - | $0.960 | $4.04 | $0.192 | 🛠️ 👁️ | Moonshot AI Kimi K2.7 Code is a coding model for agent pe... |
+| `kimi-k2-thinking` | Kimi-K2-Thinking | 216k | - | $0.475 | $2.02 | $0.142 | 🛠️ | Moonshot AI Kimi K2 Thinking is a reasoning model for lon... |
+| `kimi-k2.5` | Kimi-K2.5 | 262k | - | $0.606 | $3.03 | $0.101 | 🛠️ 👁️ | Moonshot AI Kimi K2.5 is a multimodal model for visual an... |
+| `kimi-k2.6` | Kimi-K2.6 | 262k | - | $0.960 | $4.04 | $0.162 | 🛠️ 👁️ | Moonshot AI Kimi K2.6 is a model for long-horizon coding,... |
+| `kimi-k2.7-code` | Kimi-K2.7-Code | 256k | - | $0.960 | $4.04 | $0.192 | 🛠️ 👁️ | Moonshot AI Kimi K2.7 Code is a coding model for agent pe... |
+| `kimi-k2.7-code-n` | Kimi-K2.7-Code-N | - | - | $0.960 | $4.04 | $0.192 | 🛠️ 👁️ | Kimi K2.7 Code is MoonshotAI's strongest coding & agentic... |
 | `kimi-k3` | Kimi-K3 | 1M | - | $3.03 | $15.15 | $0.303 | 🛠️ 🧠 👁️ | Kimi’s flagship model for long-horizon coding and end-to-... |
-| `kimi-k3-el` | Kimi-K3-EL | - | - | $3.03 | $15.15 | - | 🛠️ 🧠 👁️ | Kimi K3 is Moonshot AI's flagship reasoning model with a ... |
-| `linkup-deep-search` | Linkup-Deep-Search | - | - | - | - | - | - | Linkup Deep Search is an AI-powered search bot that conti... |
-| `linkup-standard` | Linkup-Standard | - | - | - | - | - | - | Linkup Standard is an AI-powered search bot that provides... |
+| `kimi-k3-el` | Kimi-K3-EL | 1M | - | $3.03 | $15.15 | - | 🛠️ 🧠 👁️ | Kimi K3 is Moonshot AI's flagship reasoning model with a ... |
+| `ling-3-0-flash` | Ling-3-0-flash | - | - | $0.061 | $0.182 | $0.012 | 🛠️ | Ling-3.0-flash is a 124B-parameter Mixture-of-Experts (Mo... |
+| `linkup-deep-search` | Linkup-Deep-Search | 32k | - | - | - | - | - | Linkup Deep Search is an AI-powered search bot that conti... |
+| `linkup-standard` | Linkup-Standard | 32k | - | - | - | - | - | Linkup Standard is an AI-powered search bot that provides... |
 | `liveportrait` | LivePortrait | - | - | - | - | - | - | Animates given portraits with the motion's in the video. ... |
 | `manus` | Manus | - | - | - | - | - | - | Manus is an autonomous AI agent that executes tasks. It c... |
 | `markitdown` | MarkItDown | - | - | - | - | - | - | Convert anything to Markdown: URLs, PDFs, Word, Excel, im... |
 | `mimo-v2-flash` | MiMo-V2-Flash | - | - | $0.101 | $0.303 | $0.020 | 🛠️ | Xiaomi MiMo-V2-Flash is a proprietary MoE model developed... |
 | `mimo-v2.5-el` | MiMo-V2.5-EL | - | - | - | - | - | - | MiMo-V2.5 is a multimodal model with native visual and au... |
-| `mimo-v2.5-pro` | MiMo-V2.5-Pro | - | - | $1.01 | $3.03 | $0.202 | 🛠️ | Xiaomi MiMo V2.5 Pro is a reasoning model for agentic wor... |
+| `mimo-v2.5-pro` | MiMo-V2.5-Pro | 1M | - | $1.01 | $3.03 | $0.202 | 🛠️ | Xiaomi MiMo V2.5 Pro is a reasoning model for agentic wor... |
 | `minimax-h3-el` | MiniMax-H3-EL | - | - | - | - | - | - | MiniMax H3 is a multimodal video generation model that pr... |
-| `minimax-m2` | MiniMax-M2 | - | - | $0.303 | $1.21 | $0.030 | 🛠️ | MiniMax M2 is a fast, efficient model for coding, agentic... |
-| `minimax-m2.1` | MiniMax-M2.1 | - | - | $0.303 | $1.21 | $0.030 | 🛠️ | MiniMax M2.1 is a reasoning model optimized for robust co... |
-| `minimax-m2.5` | MiniMax-M2.5 | - | - | $0.273 | $0.960 | $0.030 | 🛠️ | MiniMax M2.5 is a reasoning model for end-to-end developm... |
-| `minimax-m2.7` | MiniMax-M2.7 | - | - | $0.303 | $1.21 | $0.061 | 🛠️ | MiniMax M2.7 is a reasoning model for end-to-end software... |
-| `minimax-m2.7-fw` | Minimax-M2.7-FW | - | - | - | - | - | 🛠️ | Mixture-of-Experts language model. M2.7 is capable of bui... |
-| `minimax-m3` | MiniMax-M3 | - | - | $0.303 | $1.21 | $0.061 | 🛠️ 👁️ | MiniMax M3 is MiniMax's open-weight frontier model for co... |
+| `minimax-m2` | MiniMax-M2 | 204k | - | $0.303 | $1.21 | $0.030 | 🛠️ | MiniMax M2 is a fast, efficient model for coding, agentic... |
+| `minimax-m2.1` | MiniMax-M2.1 | 204k | - | $0.303 | $1.21 | $0.030 | 🛠️ | MiniMax M2.1 is a reasoning model optimized for robust co... |
+| `minimax-m2.5` | MiniMax-M2.5 | 196k | - | $0.273 | $0.960 | $0.030 | 🛠️ | MiniMax M2.5 is a reasoning model for end-to-end developm... |
+| `minimax-m2.7` | MiniMax-M2.7 | 196k | - | $0.303 | $1.21 | $0.061 | 🛠️ | MiniMax M2.7 is a reasoning model for end-to-end software... |
+| `minimax-m2.7-fw` | Minimax-M2.7-FW | 196k | - | - | - | - | 🛠️ | Mixture-of-Experts language model. M2.7 is capable of bui... |
+| `minimax-m3` | MiniMax-M3 | 512k | - | $0.303 | $1.21 | $0.061 | 🛠️ 👁️ | MiniMax M3 is MiniMax's open-weight frontier model for co... |
 | `minimax-m3-t` | MiniMax-M3-T | - | - | - | - | - | - | MiniMax M3 is MiniMax's frontier open-weight model combin... |
 | `mochi-preview` | Mochi-preview | - | - | - | - | - | - | Open state-of-the-art video generation model with high-fi... |
-| `muse-glimmer-30b-el` | Muse-Glimmer-30B-EL | - | - | - | - | - | 🛠️ 🧠 👁️ | Muse Glimmer 30B is Meta's open agentic model, built for ... |
+| `muse-glimmer-30b-el` | Muse-Glimmer-30B-EL | 131k | - | $0.202 | $0.808 | $0.051 | 🛠️ 🧠 👁️ | Muse Glimmer 30B is Meta's open agentic model, built for ... |
 | `nova-lite-1.0` | Nova-Lite-1.0 | - | - | $0.070 | $0.283 | $0.038 | 🛠️ 👁️ | Amazon Nova Lite is a low‑cost multimodal foundation mode... |
 | `nova-lite-2` | Nova-Lite-2 | - | - | $0.384 | $3.19 | $0.211 | 🛠️ 🧠 👁️ | Amazon Nova 2 Lite is a fast, cost-effective multimodal r... |
 | `nova-micro-1.0` | Nova-Micro-1.0 | - | - | $0.040 | $0.162 | $0.022 | 🛠️ | Amazon Nova Micro is a text-only foundation model in the ... |
@@ -419,16 +423,17 @@
 | `reka-research` | Reka-Research | - | - | - | - | - | - | Reka Research is a state-of-the-art agentic AI that answe... |
 | `restyler` | Restyler | - | - | - | - | - | - | This bot enables rapid transformation of existing images,... |
 | `script-bot-creator` | Script-Bot-Creator | - | - | - | - | - | - | Specializes in building workflows that combine bots on Po... |
-| `seed-2.0-code` | Seed-2.0-Code | - | - | $0.631 | $3.79 | - | 🛠️ 🧠 👁️ | Seed 2.0 Code is optimized for enterprise-grade coding sc... |
-| `seed-2.0-lite` | Seed-2.0-Lite | - | - | $0.316 | $2.53 | - | 🛠️ 🧠 👁️ | Seed 2.0 Lite is a balanced model designed for high-frequ... |
-| `seed-2.0-mini` | Seed-2.0-Mini | - | - | $0.126 | $0.505 | - | 🛠️ 🧠 👁️ | Seed-2.0-Mini from Bytedance targets latency-sensitive, h... |
-| `seed-2.0-pro` | Seed-2.0-Pro | - | - | $0.631 | $3.79 | - | 🛠️ 🧠 👁️ | Seed 2.0 Pro is a flagship all-purpose general model desi... |
-| `seed-2.1-turbo` | Seed-2.1-Turbo | - | - | $0.636 | $3.16 | - | 🛠️ 🧠 👁️ | Seed 2.1 Turbo is ByteDance's next-generation coding and ... |
+| `seed-2.0-code` | Seed-2.0-Code | 256k | - | $0.631 | $3.79 | - | 🛠️ 🧠 👁️ | Seed 2.0 Code is optimized for enterprise-grade coding sc... |
+| `seed-2.0-lite` | Seed-2.0-Lite | 256k | - | $0.316 | $2.53 | - | 🛠️ 🧠 👁️ | Seed 2.0 Lite is a balanced model designed for high-frequ... |
+| `seed-2.0-mini` | Seed-2.0-Mini | 256k | - | $0.126 | $0.505 | - | 🛠️ 🧠 👁️ | Seed-2.0-Mini from Bytedance targets latency-sensitive, h... |
+| `seed-2.0-pro` | Seed-2.0-Pro | 256k | - | $0.631 | $3.79 | - | 🛠️ 🧠 👁️ | Seed 2.0 Pro is a flagship all-purpose general model desi... |
+| `seed-2.1-turbo` | Seed-2.1-Turbo | 256k | - | $0.636 | $3.16 | - | 🛠️ 🧠 👁️ | Seed 2.1 Turbo is ByteDance's next-generation coding and ... |
 | `seedance-2.0-mini` | Seedance-2.0-Mini | - | - | - | - | - | - | Seedance 2.0 Mini is the fast, low-cost tier of ByteDance... |
 | `seedance-2.5-el` | Seedance-2.5-EL | - | - | - | - | - | - | Seedance 2.5 is ByteDance's next-generation video model. ... |
 | `solar-pro-2` | Solar-Pro-2 | 4k | 1k | - | - | - | 👁️ | Solar Pro 2 is Upstage's latest frontier-scale LLM. With ... |
-| `step-3.7-flash-el` | Step-3.7-Flash-EL | - | - | $0.202 | $1.16 | $0.040 | 🛠️ 🧠 👁️ | StepFun multimodal reasoning model with image and video i... |
+| `step-3.7-flash-el` | Step-3.7-Flash-EL | 262k | - | $0.202 | $1.16 | $0.040 | 🛠️ 🧠 👁️ | StepFun multimodal reasoning model with image and video i... |
 | `tako` | Tako | 2k | - | - | - | - | - | Tako is a bot that transforms your questions about stocks... |
+| `xiaomimimo-mimo-v2-5` | xiaomimimo-mimo-v2-5 | - | - | $0.170 | $0.339 | $0.0034 | 🛠️ 👁️ | Xiaomi's native omni-modal model (text / image / video / ... |
 
 
 ## 如何在本项目中配置模型映射
