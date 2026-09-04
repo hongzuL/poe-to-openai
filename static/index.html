@@ -44,7 +44,6 @@
         <div class="flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-medium"
              :class="status.running ? 'bg-emerald-950/40 border-emerald-700/50 text-emerald-400' : 'bg-rose-950/40 border-rose-700/50 text-rose-400'">
           <span class="relative flex h-2 w-2">
-            <span v-if="status.running" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span class="relative inline-flex rounded-full h-2 w-2" :class="status.running ? 'bg-emerald-500' : 'bg-rose-500'"></span>
           </span>
           {{ status.running ? `运行中 (PID ${status.pid})` : '已停止' }}
@@ -681,7 +680,11 @@
           try {
             const res = await fetch('/api/admin/status');
             if (res.ok) {
-              status.value = await res.json();
+              const data = await res.json();
+              // 仅在状态真正变化时更新，避免每 5 秒无谓地重建 DOM 引起闪动
+              if (JSON.stringify(data) !== JSON.stringify(status.value)) {
+                status.value = data;
+              }
             }
           } catch (e) {
             console.error(e);

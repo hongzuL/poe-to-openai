@@ -1,31 +1,56 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
 title poe-to-openai Configuration
 
-REM 1. Find python executable
+REM ---------- 1. Locate a usable Python environment ----------
 set "PY_BIN="
-if exist ".venv\Scripts\python.exe" (
-    set "PY_BIN=.venv\Scripts\python.exe"
-) else (
+if exist ".python-path" (
+    set /p _p=<".python-path"
+    if exist "!_p!" set "PY_BIN=!_p!"
+)
+if not defined PY_BIN if exist ".venv\Scripts\python.exe" set "PY_BIN=.venv\Scripts\python.exe"
+if not defined PY_BIN (
+    for %%b in (
+        "%USERPROFILE%\miniforge3"
+        "%USERPROFILE%\miniconda3"
+        "%USERPROFILE%\mambaforge3"
+        "%USERPROFILE%\anaconda3"
+        "C:\ProgramData\miniforge3"
+        "C:\ProgramData\miniconda3"
+        "C:\ProgramData\anaconda3"
+    ) do (
+        if not defined PY_BIN if exist "%%~b\envs\poe-to-openai\python.exe" set "PY_BIN=%%~b\envs\poe-to-openai\python.exe"
+    )
+)
+if not defined PY_BIN (
     where python >nul 2>nul
-    if %errorlevel% equ 0 (
+    if !errorlevel! equ 0 (
         set "PY_BIN=python"
     ) else (
         where py >nul 2>nul
-        if %errorlevel% equ 0 (
-            set "PY_BIN=py"
-        )
+        if !errorlevel! equ 0 set "PY_BIN=py"
     )
 )
 
-if "%PY_BIN%"=="" (
-    echo [ERROR] Python not found. Please install Python 3.10+ and add it to PATH.
-    pause
-    exit /b 1
+REM ---------- 2. No environment found -> auto setup ----------
+if not defined PY_BIN (
+    echo [INFO] No conda / miniforge / python environment detected. Running auto setup...
+    echo.
+    call setup.bat
+    if !errorlevel! neq 0 (
+        pause
+        exit /b 1
+    )
+    if exist ".python-path" set /p PY_BIN=<".python-path"
+    if not defined PY_BIN (
+        echo [ERROR] No usable Python environment. Please run setup.bat first.
+        pause
+        exit /b 1
+    )
 )
 
-REM 2. Run manager.py config
+REM ---------- 3. Run configuration wizard ----------
 "%PY_BIN%" manager.py config
 
 echo.
